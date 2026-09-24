@@ -33,7 +33,7 @@ public static class ServiceCollectionExtensions
             : new S3ObjectStore(storage));
 
         services.AddDbContext<PocDbContext>(o => o.UseNpgsql(
-            configuration.GetConnectionString("Postgres") ?? "Host=localhost;Database=temporal_poc;Username=poc;Password=poc",
+            configuration.GetConnectionString("Postgres") ?? "Host=localhost;Port=55432;Database=temporal_poc;Username=poc;Password=poc",
             npgsql => npgsql.EnableRetryOnFailure(0)));
         services.AddScoped<PipelineRepository>();
 
