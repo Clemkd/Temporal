@@ -14,6 +14,10 @@ builder.Services.Configure<HostOptions>(o => o.ShutdownTimeout = TimeSpan.FromSe
 builder.Services.AddHostedService<Bootstrap>();
 builder.Services.AddTemporalPoc(builder.Configuration);
 
+// Demo mode (docker compose): generates files and processing jobs automatically.
+builder.Services.AddSingleton(builder.Configuration.GetSection(DemoSettings.Section).Get<DemoSettings>() ?? new());
+builder.Services.AddHostedService<DemoFeeder>();
+
 var app = builder.Build();
 
 app.MapOpenApi();

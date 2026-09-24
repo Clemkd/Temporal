@@ -78,6 +78,7 @@ puis `processing.cleanup`. Les données ne transitent jamais par Temporal (patte
 références de lot circulent.
 - Seuils de catégorisation (`LOW`/`NORMAL`/`HIGH`/`CRITICAL`) passés en paramètres d'étape, par exemple `thresholds.temperature = "5;30;45"`.
 - Signaux `Pause`, `Resume` et `ReloadPipeline` (bascule sur la dernière version au lot suivant). Update validée `SetBatchSize`. Query `Status`.
+- Démarrage à la demande (API) ou périodique par **Temporal Schedule** (voir le mode démo). Si le `JobId` est vide, l'identifiant du workflow sert d'identifiant de job : chaque exécution planifiée a le sien.
 - Continue-as-new tous les `BatchesPerRun` lots, en transportant la progression, la taille de lot, l'état de pause et le pipeline résolu.
 - Progression persistée dans `processing_jobs`. Une annulation marque le job `Failed` (activité exécutée hors du scope annulé).
 - `ContinueOnError` par étape : le lot est ignoré et compté dans `FailedBatches` au lieu de faire échouer le job.
@@ -109,6 +110,21 @@ scripts/start-instance.sh worker1 5056 Watcher__AutoStart=false     # workers su
 docker compose up -d --build
 docker compose up -d --scale worker=4      # plus de workers quand le backlog grossit
 ```
+
+### Mode démo (activé par défaut avec `docker compose up -d --build`)
+
+Aucune commande à taper, le service `api` alimente tout seul le système :
+- **au premier démarrage**, il dépose 300 fichiers dans `incoming/demo/burst-…/` (environ 5 % invalides, 1 % « poison », 2 % lents). Le watcher les détecte et lance un workflow par fichier ;
+- **ensuite, chaque minute**, il dépose 17 fichiers (≈ 1000 fichiers/h) dans `incoming/demo/flow/…` ;
+- **il crée des Temporal Schedules** (`demo-processing-<type>`, un par type de capteur) qui lancent toutes les 5 minutes un job de traitement des mesures non encore catégorisées.
+
+À regarder :
+- Temporal UI (http://localhost:18080) : onglets *Workflows* et *Schedules* ;
+- `curl localhost:5055/api/stats` ;
+- `temporal schedule list`.
+
+Réglages par `.env` : `DEMO_ENABLED=false` pour le désactiver, `DEMO_INITIAL_FILES`, `DEMO_FILES_PER_MINUTE`, `DEMO_PROCESSING_EVERY_MINUTES`.
+La rafale initiale n'est faite qu'une fois (marqueur `demo/.initial-burst-done` dans le bucket). `docker compose down -v` remet tout à zéro.
 
 Spec OpenAPI : `http://localhost:5055/openapi/v1.json`. Sans S3, on peut utiliser `Storage__Provider=FileSystem`.
 

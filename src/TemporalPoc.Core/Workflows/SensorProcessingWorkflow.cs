@@ -31,6 +31,11 @@ public sealed class SensorProcessingWorkflow
     [WorkflowRun]
     public async Task<ProcessingProgress> RunAsync(ProcessingJobInput input)
     {
+        // Empty JobId (e.g. started by a Temporal Schedule): the workflow id, unique per scheduled run, is the job id.
+        if (string.IsNullOrEmpty(input.JobId))
+        {
+            input = input with { JobId = Workflow.Info.WorkflowId };
+        }
         _input = input;
         _batchSize = input.BatchSize;
         _paused = input.Paused;

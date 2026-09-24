@@ -77,6 +77,7 @@ public sealed record ReconcileResult(int Checked, int ReDispatched);
 
 public sealed record ProcessingJobInput
 {
+    /// <summary>Job id. Empty = use the workflow id (runs started by a Temporal Schedule).</summary>
     public required string JobId { get; init; }
     public required string SensorType { get; init; }
     public int BatchSize { get; init; } = 500;

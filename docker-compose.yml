@@ -73,12 +73,18 @@ services:
     depends_on: [temporal]
 
   # API + watcher + one worker of each queue.
+  # Demo mode: writes files into incoming/ at startup (burst) then continuously (~1000/h), and creates
+  # Temporal Schedules that start processing jobs. Disable with DEMO_ENABLED=false.
   api:
     <<: *app
     ports: ["${API_PORT:-5055}:8080"]
     environment:
       <<: *app-env
       Worker__Enabled: "true"
+      Demo__Enabled: "${DEMO_ENABLED:-true}"
+      Demo__InitialFiles: "${DEMO_INITIAL_FILES:-300}"
+      Demo__FilesPerMinute: "${DEMO_FILES_PER_MINUTE:-17}"
+      Demo__ProcessingEveryMinutes: "${DEMO_PROCESSING_EVERY_MINUTES:-5}"
 
   # Additional workers (no watcher auto start, API unused). Scale with: docker compose up -d --scale worker=4
   worker:

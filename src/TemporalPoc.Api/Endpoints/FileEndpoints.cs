@@ -3,21 +3,10 @@ using Microsoft.EntityFrameworkCore;
 using Temporalio.Client;
 using Temporalio.Exceptions;
 using TemporalPoc.Core.Data;
-using TemporalPoc.Core.Domain;
 using TemporalPoc.Core.Storage;
 using TemporalPoc.Core.Workflows;
 
 namespace TemporalPoc.Api.Endpoints;
-
-public sealed record SimulationRequest(
-    int Count = 100,
-    int RowsPerFile = 200,
-    double InvalidRatio = 0.05,
-    double PoisonRatio = 0.01,
-    double SlowRatio = 0.0,
-    double JsonRatio = 0.3,
-    string? Prefix = null,
-    int? Seed = null);
 
 public static class FileEndpoints
 {
@@ -87,24 +76,7 @@ public static class FileEndpoints
 
         app.MapPost("/api/simulation/files", async (SimulationRequest request, IObjectStore store, ITemporalClient client, CancellationToken ct) =>
         {
-            var random = request.Seed is { } seed ? new Random(seed) : new Random();
-            var prefix = request.Prefix ?? $"sim-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
-            var plan = Enumerable.Range(0, request.Count).Select(i =>
-            {
-                var roll = random.NextDouble();
-                var kind = roll < request.InvalidRatio ? GeneratedFileKind.Invalid
-                    : roll < request.InvalidRatio + request.PoisonRatio ? GeneratedFileKind.Poison
-                    : roll < request.InvalidRatio + request.PoisonRatio + request.SlowRatio ? GeneratedFileKind.Slow
-                    : GeneratedFileKind.Valid;
-                return (Index: i, Kind: kind, Json: random.NextDouble() < request.JsonRatio, Seed: random.Next());
-            }).ToList();
-
-            var counts = plan.GroupBy(p => p.Kind).ToDictionary(g => g.Key.ToString(), g => g.Count());
-            await Parallel.ForEachAsync(plan, new ParallelOptions { MaxDegreeOfParallelism = 16, CancellationToken = ct }, async (p, token) =>
-            {
-                var (name, content) = SensorFileGenerator.Generate($"{prefix}/file-{p.Index:D6}", p.Kind, request.RowsPerFile, p.Json, new Random(p.Seed));
-                await store.PutBytesAsync(FileLayout.IncomingKey(name), content, p.Json ? "application/json" : "text/csv", null, token);
-            });
+            var (prefix, counts) = await FileSimulator.GenerateAsync(store, request, ct);
             await WatcherEndpoints.TryPokeAsync(client);
             return Results.Accepted(value: new { prefix, generated = request.Count, kinds = counts });
         }).WithTags("Simulation").WithSummary("Generates files (valid, invalid, poison, slow) directly in incoming/");
