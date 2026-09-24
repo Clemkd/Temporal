@@ -47,8 +47,12 @@ public sealed class DemoFeeder(DemoSettings settings, IObjectStore store, ITempo
     {
         if (!settings.Enabled)
         {
+            logger.LogInformation("Demo mode disabled (enable with Demo__Enabled=true, or DEMO_ENABLED=true in docker compose)");
             return;
         }
+        logger.LogInformation(
+            "Demo mode enabled: initial burst {Initial} files, then {PerMinute} files/min, processing schedules every {Minutes} min",
+            settings.InitialFiles, settings.FilesPerMinute, settings.ProcessingEveryMinutes);
 
         // Bootstrap (bucket, schema, watcher) runs before; give the workers a few seconds to connect.
         await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
@@ -72,8 +76,13 @@ public sealed class DemoFeeder(DemoSettings settings, IObjectStore store, ITempo
 
     private async Task InitialBurstAsync(CancellationToken ct)
     {
-        if (settings.InitialFiles <= 0 || await store.StatAsync(Marker, ct) is not null)
+        if (settings.InitialFiles <= 0)
         {
+            return;
+        }
+        if (await store.StatAsync(Marker, ct) is not null)
+        {
+            logger.LogInformation("Demo: initial burst already done on a previous start ({Marker} exists), continuous flow only", Marker);
             return;
         }
         await GenerateAsync(settings.InitialFiles, $"demo/burst-{DateTime.UtcNow:yyyyMMdd-HHmmss}", ct);
