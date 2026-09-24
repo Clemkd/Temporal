@@ -2,7 +2,7 @@
 #   docker compose up -d postgres seaweedfs temporal temporal-ui   # infra only (run the app with dotnet run)
 #   docker compose up -d --build                                   # everything, with 2 worker replicas
 # Host ports can be overridden (env or .env file): POSTGRES_PORT (55432), S3_PORT (8333),
-# TEMPORAL_PORT (7233), TEMPORAL_UI_PORT (8080), API_PORT (5055). See .env.example.
+# TEMPORAL_PORT (7233), TEMPORAL_UI_PORT (18080), API_PORT (5055). See .env.example.
 name: temporal-poc
 
 x-app: &app
@@ -69,7 +69,7 @@ services:
     image: temporalio/ui:latest
     environment:
       TEMPORAL_ADDRESS: temporal:7233
-    ports: ["${TEMPORAL_UI_PORT:-8080}:8080"]
+    ports: ["${TEMPORAL_UI_PORT:-18080}:8080"]
     depends_on: [temporal]
 
   # API + watcher + one worker of each queue.

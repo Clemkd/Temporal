@@ -96,7 +96,7 @@ références de lot circulent.
 Prérequis : Docker, SDK .NET 10.
 
 ```bash
-# Infra : Postgres (port hôte 55432), SeaweedFS (S3), Temporal (auto-setup sur Postgres), Temporal UI (http://localhost:8080)
+# Infra : Postgres (port hôte 55432), SeaweedFS (S3), Temporal (auto-setup sur Postgres), Temporal UI (http://localhost:18080)
 # Ports hôte déjà pris ? copier .env.example en .env et les changer (POSTGRES_PORT, S3_PORT, TEMPORAL_PORT…)
 docker compose up -d postgres seaweedfs temporal temporal-ui
 
