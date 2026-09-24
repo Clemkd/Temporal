@@ -1,0 +1,93 @@
+# Infrastructure + application.
+#   docker compose up -d postgres seaweedfs temporal temporal-ui   # infra only (run the app with dotnet run)
+#   docker compose up -d --build                                   # everything, with 2 worker replicas
+name: temporal-poc
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped   # crash -> restart: the workflows resume where they stopped
+  depends_on:
+    postgres: { condition: service_healthy }
+    temporal: { condition: service_healthy }
+    seaweedfs: { condition: service_started }
+  environment: &app-env
+    ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=temporal_poc;Username=poc;Password=poc;Maximum Pool Size=100"
+    Temporal__Address: "temporal:7233"
+    Storage__Provider: "S3"
+    Storage__ServiceUrl: "http://seaweedfs:8333"
+    Storage__Bucket: "sensor-files"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: poc
+      POSTGRES_PASSWORD: poc
+      POSTGRES_DB: temporal_poc
+    command: ["postgres", "-c", "max_connections=400"]
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U poc -d temporal_poc"]
+      interval: 5s
+      retries: 20
+
+  # S3 compatible object storage (MinIO images are no longer published on Docker Hub).
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-s3.config=/etc/seaweedfs/s3.json", "-volume.max=0", "-master.volumeSizeLimitMB=256"]
+    ports: ["8333:8333"]
+    volumes:
+      - s3data:/data
+      - ./deploy/seaweedfs-s3.json:/etc/seaweedfs/s3.json:ro
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: poc
+      POSTGRES_PWD: poc
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/dynamic.yaml
+    volumes:
+      - ./deploy/temporal-dynamic.yaml:/etc/temporal/config/dynamicconfig/dynamic.yaml:ro
+    ports: ["7233:7233"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address $$(hostname -i):7233 cluster health | grep -q SERVING || temporal operator cluster health --address $$(hostname -i):7233 | grep -q SERVING"]
+      interval: 5s
+      retries: 60
+      start_period: 20s
+
+  temporal-ui:
+    image: temporalio/ui:latest
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports: ["8080:8080"]
+    depends_on: [temporal]
+
+  # API + watcher + one worker of each queue.
+  api:
+    <<: *app
+    ports: ["5055:8080"]
+    environment:
+      <<: *app-env
+      Worker__Enabled: "true"
+
+  # Additional workers (no watcher auto start, API unused). Scale with: docker compose up -d --scale worker=4
+  worker:
+    <<: *app
+    deploy:
+      replicas: 2
+    environment:
+      <<: *app-env
+      Worker__Enabled: "true"
+      Watcher__AutoStart: "false"
+
+volumes:
+  pgdata:
+  s3data:

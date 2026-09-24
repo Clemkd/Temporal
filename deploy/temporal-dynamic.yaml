@@ -1,0 +1,7 @@
+# Dev friendly limits for the POC.
+limit.maxIDLength:
+  - value: 1000
+frontend.enableUpdateWorkflowExecution:
+  - value: true
+system.enableEagerWorkflowStart:
+  - value: true

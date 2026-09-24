@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "poc",
+      "credentials": [{ "accessKey": "poc", "secretKey": "poc-secret" }],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    }
+  ]
+}
