@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs the workflow-start benchmark for several batch sizes, each on a FRESH Temporal database.
 #   bench/run_bench.sh <count> [batch sizes...]      e.g. bench/run_bench.sh 1000000 1 100 1000 10000
+#   MAX_SECONDS=600 bench/run_bench.sh 1000000 ...  (each mode stops after 10 min; default: no limit)
 # Results: bench/results/<label>/{bench.csv,metrics.csv,bench.summary.json,db_after.txt}
 set -euo pipefail
 COUNT=${1:?count}; shift
@@ -26,7 +27,7 @@ for BATCH in ${BATCHES[@]}; do
   python3 "$ROOT/sampler.py" "$OUT/metrics.csv" &
   SAMPLER=$!
   sleep 5    # baseline before the load
-  "${BENCH[@]}" --address localhost:17233 --count "$COUNT" --batch "$BATCH" --label "$LABEL" --out "$OUT/bench.csv" | tee "$OUT/bench.log"
+  "${BENCH[@]}" --address localhost:17233 --count "$COUNT" --batch "$BATCH" --label "$LABEL" --out "$OUT/bench.csv" --max-seconds "${MAX_SECONDS:-1e12}" | tee "$OUT/bench.log"
   sleep 20   # tail: what the server still does after the last start (transfer tasks -> matching)
   kill $SAMPLER; wait $SAMPLER 2>/dev/null || true
 

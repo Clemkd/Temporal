@@ -4,6 +4,7 @@
 //
 //   dotnet run -c Release -- --address localhost:17233 --count 1000000 --batch 100 --out run.csv
 //   (--batch 1 = strictly sequential: each start awaits the previous one)
+//   --max-seconds 600 stops starting new workflows after 10 min (the in-flight batch completes).
 using System.Diagnostics;
 using System.Globalization;
 using Temporalio.Client;
@@ -69,7 +70,7 @@ async Task StartOneAsync(long i)
 
 if (opts.Batch <= 1)
 {
-    for (long i = 0; i < opts.Count; i++)
+    for (long i = 0; i < opts.Count && sw.Elapsed.TotalSeconds < opts.MaxSeconds; i++)
     {
         await StartOneAsync(i);
     }
@@ -78,7 +79,7 @@ else
 {
     // "Batch" = N concurrent StartWorkflow calls, the next batch starts when the whole batch is done.
     // (Temporal has no bulk-start RPC: this is the only way to batch from a client.)
-    for (long offset = 0; offset < opts.Count; offset += opts.Batch)
+    for (long offset = 0; offset < opts.Count && sw.Elapsed.TotalSeconds < opts.MaxSeconds; offset += opts.Batch)
     {
         var size = (int)Math.Min(opts.Batch, opts.Count - offset);
         var tasks = new Task[size];
@@ -93,22 +94,24 @@ else
 var elapsed = sw.Elapsed.TotalSeconds;
 reporterCts.Cancel();
 await reporter;
-Console.WriteLine($"DONE {opts.Label}: {opts.Count:N0} starts in {elapsed:F1}s = {opts.Count / elapsed:F0}/s, retried errors: {errors}");
+var done = Interlocked.Read(ref started);
+Console.WriteLine($"DONE {opts.Label}: {done:N0} starts in {elapsed:F1}s = {done / elapsed:F0}/s, retried errors: {errors}");
 File.WriteAllText(Path.ChangeExtension(opts.Out, ".summary.json"),
-    $"{{\"label\":\"{opts.Label}\",\"count\":{opts.Count},\"batch\":{opts.Batch},\"elapsed_s\":{F(elapsed)},\"rate\":{F(opts.Count / elapsed)},\"errors\":{errors}}}");
+    $"{{\"label\":\"{opts.Label}\",\"count\":{done},\"batch\":{opts.Batch},\"elapsed_s\":{F(elapsed)},\"rate\":{F(done / elapsed)},\"errors\":{errors}}}");
 
 static double Pct(double[] sorted, double p) => sorted.Length == 0 ? 0 : sorted[Math.Min(sorted.Length - 1, (int)(p * sorted.Length))];
 static string F(double v) => v.ToString("0.###", CultureInfo.InvariantCulture);
 
 record BenchInput(string Key, long Index, string Pipeline);
 
-record Args(string Address, long Count, int Batch, string Label, string Out)
+record Args(string Address, long Count, int Batch, string Label, string Out, double MaxSeconds)
 {
     public static Args Parse(string[] a)
     {
         string Get(string name, string fallback) { var i = Array.IndexOf(a, name); return i >= 0 && i + 1 < a.Length ? a[i + 1] : fallback; }
         var batch = int.Parse(Get("--batch", "1"));
         var label = Get("--label", batch <= 1 ? "seq" : $"b{batch}");
-        return new(Get("--address", "localhost:17233"), long.Parse(Get("--count", "10000")), batch, label, Get("--out", $"{label}.csv"));
+        return new(Get("--address", "localhost:17233"), long.Parse(Get("--count", "10000")), batch, label, Get("--out", $"{label}.csv"),
+            double.Parse(Get("--max-seconds", "1e12"), CultureInfo.InvariantCulture));
     }
 }

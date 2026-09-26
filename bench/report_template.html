@@ -93,7 +93,7 @@
 <div class="wrap">
   <header>
     <h1>Bench 1M démarrages de workflows Temporal</h1>
-    <p class="lede">Coût de la mise en task queue de 1 000 000 workflows sur Temporal adossé à PostgreSQL, selon la façon de les démarrer : un par un, ou par paquets de 100, 1 000 et 10 000 appels simultanés.</p>
+    <p class="lede">Coût de la mise en task queue de workflows sur Temporal adossé à PostgreSQL, selon la façon de les démarrer : un par un, ou par paquets de 100, 1 000 et 10 000 appels simultanés. Chaque mode tourne 10 minutes (plafond 1 000 000 de démarrages).</p>
     <p class="setup">Machine unique 4 vCPU / 15 Go (client, Temporal et Postgres ensemble) · Temporal 1.x auto-setup, 128 shards d'historique · PostgreSQL 17 · SDK .NET Temporalio 1.19 · aucun worker : chaque workflow reste en attente dans la file · base remise à zéro avant chaque mode · échantillonnage chaque seconde.</p>
   </header>
 
