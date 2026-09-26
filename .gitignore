@@ -8,3 +8,5 @@ TestResults/
 *.log
 __pycache__/
 .env
+bench/results/
+bench/run.log

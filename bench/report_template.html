@@ -1,0 +1,465 @@
+<title>Bench 1M démarrages</title>
+<style>
+  :root {
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #6f6d67;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --ring: rgba(11, 11, 11, 0.10);
+    --accent: #2a78d6;
+    --s1: #2a78d6;
+    --s2: #eb6834;
+    --s3: #1baf7a;
+    --s4: #eda100;
+    --pill-run: #fdf1d6;
+    --pill-run-ink: #7a5200;
+    --pill-done: #e3f2e3;
+    --pill-done-ink: #006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a988f;
+      --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10); --accent: #3987e5;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+      --pill-run: #3a2e12; --pill-run-ink: #fab219; --pill-done: #12301a; --pill-done-ink: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a988f;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10); --accent: #3987e5;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --pill-run: #3a2e12; --pill-run-ink: #fab219; --pill-done: #12301a; --pill-done-ink: #0ca30c;
+  }
+
+  body {
+    background: var(--page);
+    color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 56px; display: grid; gap: 28px; }
+  header { display: grid; gap: 8px; max-width: 78ch; }
+  h1 { font-size: 28px; line-height: 1.2; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 18px; margin: 0; text-wrap: balance; }
+  .lede { margin: 0; color: var(--ink-2); }
+  .setup { margin: 0; color: var(--muted); font-size: 13px; }
+  code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 0.9em; }
+
+  section { display: grid; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; }
+
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { padding: 9px 12px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--grid); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: 0.02em; }
+  th:first-child, td:first-child { text-align: left; }
+  td { font-variant-numeric: tabular-nums; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .mode { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+  .key { width: 14px; height: 2px; border-radius: 2px; display: inline-block; }
+  .pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; margin-left: 6px; }
+  .pill.run { background: var(--pill-run); color: var(--pill-run-ink); }
+  .pill.done { background: var(--pill-done); color: var(--pill-done-ink); }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; }
+  .seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    font: inherit; font-size: 13px; background: transparent; color: var(--ink-2); border: 0; padding: 6px 12px; cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+  .seg button:focus-visible, .legend label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); }
+  .legend label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  .legend input { accent-color: var(--ink); margin: 0; }
+  .ctl-label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.02em; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 14px; }
+  .chart { padding: 14px 16px 10px; display: grid; gap: 4px; }
+  .chart h3 { margin: 0; font-size: 14.5px; }
+  .chart p { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .canvas-box { position: relative; height: 250px; min-width: 0; }
+  .chart { min-width: 0; }
+
+  .notes { display: grid; gap: 10px; max-width: 80ch; }
+  .notes p, .notes li { margin: 0; color: var(--ink-2); }
+  .notes ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+  .pending { color: var(--muted); font-style: italic; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Bench 1M démarrages de workflows Temporal</h1>
+    <p class="lede">Coût de la mise en task queue de 1 000 000 workflows sur Temporal adossé à PostgreSQL, selon la façon de les démarrer : un par un, ou par paquets de 100, 1 000 et 10 000 appels simultanés.</p>
+    <p class="setup">Machine unique 4 vCPU / 15 Go (client, Temporal et Postgres ensemble) · Temporal 1.x auto-setup, 128 shards d'historique · PostgreSQL 17 · SDK .NET Temporalio 1.19 · aucun worker : chaque workflow reste en attente dans la file · base remise à zéro avant chaque mode · échantillonnage chaque seconde.</p>
+  </header>
+
+  <section aria-labelledby="summary-title">
+    <h2 id="summary-title">Résultats par mode</h2>
+    <div class="card table-scroll">
+      <table id="summary">
+        <thead>
+          <tr>
+            <th scope="col">Mode</th>
+            <th scope="col">Démarrés</th>
+            <th scope="col">Durée</th>
+            <th scope="col">Débit moyen</th>
+            <th scope="col">Latence p50</th>
+            <th scope="col">p99 max</th>
+            <th scope="col">CPU Temporal moy.</th>
+            <th scope="col">CPU Postgres moy.</th>
+            <th scope="col">RAM Temporal max</th>
+            <th scope="col">RAM Postgres max</th>
+            <th scope="col">INSERT moyen</th>
+            <th scope="col">INSERT / démarrage</th>
+            <th scope="col">Base finale</th>
+            <th scope="col">Erreurs</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="setup">CPU en % d'un cœur (400 % = machine entière). RAM hors cache disque. Latence mesurée côté client par appel <code>StartWorkflow</code>. INSERT moyen : temps d'exécution Postgres (pg_stat_statements), pondéré par le nombre d'appels.</p>
+  </section>
+
+  <section aria-labelledby="curves-title">
+    <h2 id="curves-title">Courbes</h2>
+    <div class="controls">
+      <span class="ctl-label" id="xaxis-label">Axe horizontal</span>
+      <div class="seg" role="group" aria-labelledby="xaxis-label">
+        <button type="button" id="x-time" aria-pressed="true">Temps (min)</button>
+        <button type="button" id="x-started" aria-pressed="false">Workflows démarrés</button>
+      </div>
+      <span class="ctl-label">Modes</span>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="grid" id="charts"></div>
+  </section>
+
+  <section aria-labelledby="pg-title">
+    <h2 id="pg-title">Ce que coûte un démarrage dans PostgreSQL</h2>
+    <div class="grid">
+      <div class="card table-scroll">
+        <table id="tables"><thead><tr><th scope="col">Table</th><th scope="col">Lignes insérées</th><th scope="col">Taille</th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card table-scroll">
+        <table id="statements"><thead><tr><th scope="col">Requête (début)</th><th scope="col">Appels</th><th scope="col">Moyenne</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+    <p class="setup" id="pg-source"></p>
+  </section>
+
+  <section aria-labelledby="notes-title" class="notes">
+    <h2 id="notes-title">Lecture</h2>
+    <div id="notes"><!--__NOTES__--></div>
+  </section>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const DATA = /*__DATA__*/null;
+const ORDER = ["seq", "b100", "b1000", "b10000"];
+const SLOT = { seq: "--s1", b100: "--s2", b1000: "--s3", b10000: "--s4" };
+const modes = ORDER.filter(m => DATA && DATA[m]);
+const visible = new Set(modes);
+let xMode = "time";
+try { xMode = localStorage.getItem("bench-x") || "time"; } catch (e) {}
+
+const nf = new Intl.NumberFormat("fr-FR");
+const nf1 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 });
+const nf3 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 3 });
+const compact = v => v >= 1e6 ? nf1.format(v / 1e6) + " M" : v >= 1e3 ? nf1.format(v / 1e3) + " k" : nf.format(Math.round(v));
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const duration = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${String(Math.round((s % 3600) / 60)).padStart(2, "0")}` : s >= 60 ? `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, "0")}` : `${nf1.format(s)} s`;
+
+function cell(tr, text) { const td = document.createElement("td"); td.textContent = text; tr.appendChild(td); return td; }
+
+function modeLabel(m) {
+  const span = document.createElement("span");
+  span.className = "mode";
+  const key = document.createElement("span");
+  key.className = "key";
+  key.style.background = `var(${SLOT[m]})`;
+  span.append(key, document.createTextNode(DATA[m].stats.name));
+  return span;
+}
+
+function renderSummary() {
+  const tbody = document.querySelector("#summary tbody");
+  tbody.textContent = "";
+  for (const m of modes) {
+    const s = DATA[m].stats;
+    const tr = document.createElement("tr");
+    const first = document.createElement("td");
+    first.appendChild(modeLabel(m));
+    const pill = document.createElement("span");
+    pill.className = "pill " + (s.done ? "done" : "run");
+    pill.textContent = s.done ? "terminé" : "en cours";
+    first.appendChild(pill);
+    tr.appendChild(first);
+    cell(tr, nf.format(s.count));
+    cell(tr, duration(s.elapsed_s));
+    cell(tr, nf.format(Math.round(s.rate)) + " /s");
+    cell(tr, nf1.format(s.p50_ms) + " ms");
+    cell(tr, nf.format(Math.round(s.p99_ms_max)) + " ms");
+    cell(tr, nf.format(Math.round(s.temporal_cpu_avg)) + " %");
+    cell(tr, nf.format(Math.round(s.postgres_cpu_avg)) + " %");
+    cell(tr, nf.format(s.temporal_mem_max) + " Mo");
+    cell(tr, nf.format(s.postgres_mem_max) + " Mo");
+    cell(tr, nf3.format(s.insert_mean_ms) + " ms");
+    cell(tr, nf1.format(s.inserts_per_start));
+    cell(tr, s.db_size_mb ? nf.format(Math.round(s.db_size_mb)) + " Mo" : "–");
+    cell(tr, nf.format(s.errors));
+    tbody.appendChild(tr);
+  }
+}
+
+function renderPg() {
+  const source = [...modes].reverse().find(m => DATA[m].db.tables.length) || null;
+  const tt = document.querySelector("#tables tbody"), st = document.querySelector("#statements tbody");
+  tt.textContent = ""; st.textContent = "";
+  if (!source) { document.getElementById("pg-source").textContent = "Disponible à la fin du premier mode."; return; }
+  const d = DATA[source].db, n = DATA[source].stats.count;
+  for (const t of d.tables.slice(0, 10)) {
+    const tr = document.createElement("tr");
+    cell(tr, t.table); cell(tr, nf.format(t.rows)); cell(tr, t.size);
+    tt.appendChild(tr);
+  }
+  for (const q of d.statements.slice(0, 8)) {
+    const tr = document.createElement("tr");
+    const td = cell(tr, q.query.length > 64 ? q.query.slice(0, 64) + "…" : q.query);
+    td.title = q.query;
+    cell(tr, nf.format(q.calls)); cell(tr, nf3.format(q.mean_ms) + " ms");
+    st.appendChild(tr);
+  }
+  document.getElementById("pg-source").textContent =
+    `Mesuré à la fin du mode « ${DATA[source].stats.name} » (${nf.format(n)} workflows démarrés, base « temporal »).`;
+}
+
+const CHARTS = [
+  { src: "bench", key: "starts_per_s", title: "Démarrages par seconde", note: "Workflows mis en file par seconde, vus du client." },
+  { src: "bench", key: "lat_p50_ms", title: "Latence d'un démarrage, médiane", note: "Temps d'un appel StartWorkflow côté client, échelle logarithmique.", unit: "ms", log: true },
+  { src: "bench", key: "lat_p99_ms", title: "Latence d'un démarrage, p99", note: "99 % des appels sont plus rapides, échelle logarithmique.", unit: "ms", log: true },
+  { src: "metrics", key: "postgres_cpu_pct", title: "CPU Postgres", note: "En % d'un cœur, 400 % = les 4 vCPU.", unit: "%" },
+  { src: "metrics", key: "temporal_cpu_pct", title: "CPU Temporal", note: "En % d'un cœur (frontend, history et matching dans un même process).", unit: "%" },
+  { src: "metrics", key: "postgres_mem_mb", title: "RAM Postgres", note: "Hors cache disque ; shared_buffers = 1 Go.", unit: "Mo" },
+  { src: "metrics", key: "temporal_mem_mb", title: "RAM Temporal", note: "Hors cache disque.", unit: "Mo" },
+  { src: "metrics", key: "insert_mean_ms", title: "Temps moyen d'un INSERT Postgres", note: "Temps d'exécution côté serveur, moyenne par intervalle.", unit: "ms" },
+  { src: "metrics", key: "insert_per_s", title: "INSERT par seconde", note: "Toutes tables confondues (exécutions, historique, tâches, visibilité)." },
+  { src: "metrics", key: "commits_per_s", title: "Transactions validées par seconde", note: "Inclut les lectures des processeurs de files des shards." },
+  { src: "metrics", key: "db_size_mb", title: "Taille des bases Temporal", note: "temporal + temporal_visibility, hors WAL.", unit: "Mo" },
+];
+
+// One tooltip row per series: the point of each series nearest to the pointer on X.
+Chart.Interaction.modes.nearestPerSeries = (chart, e, options, useFinalPosition) => {
+  const pos = Chart.helpers.getRelativePosition(e, chart);
+  const xScale = chart.scales.x;
+  if (pos.x < chart.chartArea.left || pos.x > chart.chartArea.right) return [];
+  const xv = xScale.getValueForPixel(pos.x);
+  const items = [];
+  chart.data.datasets.forEach((ds, di) => {
+    const meta = chart.getDatasetMeta(di);
+    if (meta.hidden || !ds.data.length) return;
+    let lo = 0, hi = ds.data.length - 1;
+    if (xv < ds.data[0].x - (ds.data[hi].x - ds.data[0].x) * 0.02 || xv > ds.data[hi].x * 1.02) return;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (ds.data[mid].x < xv) lo = mid + 1; else hi = mid; }
+    if (lo > 0 && Math.abs(ds.data[lo - 1].x - xv) < Math.abs(ds.data[lo].x - xv)) lo--;
+    items.push({ element: meta.data[lo], datasetIndex: di, index: lo });
+  });
+  return items;
+};
+
+const crosshair = {
+  id: "crosshair",
+  afterDraw(chart) {
+    const active = chart.tooltip && chart.tooltip.getActiveElements();
+    if (!active || !active.length || chart._pointerX == null) return;
+    const { ctx, chartArea } = chart;
+    ctx.save();
+    ctx.strokeStyle = css("--axis");
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(Math.round(chart._pointerX) + 0.5, chartArea.top);
+    ctx.lineTo(Math.round(chart._pointerX) + 0.5, chartArea.bottom);
+    ctx.stroke();
+    ctx.restore();
+  },
+  afterEvent(chart, args) {
+    const e = args.event;
+    chart._pointerX = e.type === "mouseout" ? null : e.x;
+  },
+};
+
+// Direct end labels, only where they do not collide (legend + tooltip carry the rest).
+const endLabels = {
+  id: "endLabels",
+  afterDatasetsDraw(chart) {
+    const { ctx, chartArea } = chart;
+    const placed = [];
+    ctx.save();
+    ctx.font = "600 11px system-ui, -apple-system, 'Segoe UI', sans-serif";
+    ctx.fillStyle = css("--ink-2");
+    ctx.textBaseline = "middle";
+    chart.data.datasets.forEach((ds, di) => {
+      const meta = chart.getDatasetMeta(di);
+      if (meta.hidden || !meta.data.length) return;
+      const pt = meta.data[meta.data.length - 1];
+      const text = ds.shortLabel;
+      const w = ctx.measureText(text).width;
+      let x = pt.x + 6;
+      if (x + w > chartArea.right) x = pt.x - w - 6;
+      const y = Math.min(Math.max(pt.y, chartArea.top + 6), chartArea.bottom - 6);
+      if (placed.some(p => Math.abs(p.y - y) < 13 && Math.abs(p.x - x) < Math.max(p.w, w) + 4)) return;
+      placed.push({ x, y, w });
+      ctx.fillText(text, x, y);
+    });
+    ctx.restore();
+  },
+};
+
+const SHORT = { seq: "1×1", b100: "×100", b1000: "×1 000", b10000: "×10 000" };
+const charts = [];
+
+function datasetsFor(def) {
+  return modes.map(m => {
+    const src = DATA[m][def.src];
+    const xs = xMode === "time" ? src.t : src.started;
+    const data = [];
+    for (let i = 0; i < xs.length; i++) {
+      const y = src[def.key][i];
+      if (def.log && !(y > 0)) continue;
+      data.push({ x: xs[i], y });
+    }
+    const color = css(SLOT[m]);
+    return {
+      label: DATA[m].stats.name, shortLabel: SHORT[m], mode: m, data,
+      borderColor: color, backgroundColor: color, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
+      pointHoverBorderWidth: 2, pointHoverBorderColor: css("--surface"), tension: 0.15,
+      borderCapStyle: "round", borderJoinStyle: "round", hidden: !visible.has(m),
+    };
+  });
+}
+
+function fmtY(def, v) {
+  const unit = def.unit ? " " + def.unit : "";
+  if (def.key === "insert_mean_ms") return nf3.format(v) + unit;
+  if (Math.abs(v) >= 1000) return compact(v) + unit;
+  return nf1.format(v) + unit;
+}
+
+function fmtX(v) { return xMode === "time" ? nf1.format(v) + " min" : compact(v); }
+
+function buildCharts() {
+  const host = document.getElementById("charts");
+  charts.forEach(c => c.destroy());
+  charts.length = 0;
+  host.textContent = "";
+  const grid = css("--grid"), muted = css("--muted"), axis = css("--axis");
+  for (const def of CHARTS) {
+    const card = document.createElement("figure");
+    card.className = "card chart";
+    card.style.margin = "0";
+    const h = document.createElement("h3"); h.textContent = def.title;
+    const p = document.createElement("p"); p.textContent = def.note;
+    const box = document.createElement("div"); box.className = "canvas-box";
+    const canvas = document.createElement("canvas");
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", def.title + " : les valeurs agrégées figurent dans le tableau des résultats.");
+    box.appendChild(canvas);
+    card.append(h, p, box);
+    host.appendChild(card);
+    const chart = new Chart(canvas, {
+      type: "line",
+      data: { datasets: datasetsFor(def) },
+      plugins: [crosshair, endLabels],
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false, parsing: false, normalized: true,
+        layout: { padding: { right: 52, top: 6 } },
+        interaction: { mode: "nearestPerSeries", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: css("--surface"), titleColor: muted, bodyColor: css("--ink"),
+            borderColor: axis, borderWidth: 1, padding: 10, boxWidth: 14, boxHeight: 2, usePointStyle: false,
+            titleFont: { weight: "500", size: 12 }, bodyFont: { weight: "600", size: 13 },
+            callbacks: {
+              title: items => items.length ? (xMode === "time" ? `${nf1.format(items[0].parsed.x)} min` : `${nf.format(Math.round(items[0].parsed.x))} démarrés`) : "",
+              label: it => `${fmtY(def, it.parsed.y)}  ${it.dataset.label}`,
+              labelColor: it => ({ borderColor: it.dataset.borderColor, backgroundColor: it.dataset.borderColor, borderWidth: 0 }),
+            },
+          },
+        },
+        scales: {
+          x: {
+            type: "linear", min: 0,
+            grid: { color: grid, drawTicks: false }, border: { color: axis },
+            ticks: { color: muted, maxTicksLimit: 7, callback: v => fmtX(v), padding: 6, font: { size: 11 } },
+          },
+          y: {
+            type: def.log ? "logarithmic" : "linear", beginAtZero: !def.log,
+            grid: { color: grid, drawTicks: false }, border: { display: false },
+            ticks: {
+              color: muted, maxTicksLimit: 6, padding: 6, font: { size: 11 },
+              callback: function (v) {
+                if (def.log && ![1, 2, 5].includes(Math.round(v / Math.pow(10, Math.floor(Math.log10(v)))))) return null;
+                return fmtY(def, v);
+              },
+            },
+          },
+        },
+      },
+    });
+    chart._def = def;
+    charts.push(chart);
+  }
+}
+
+function renderLegend() {
+  const legend = document.getElementById("legend");
+  legend.textContent = "";
+  for (const m of modes) {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox"; input.id = "mode-" + m; input.checked = visible.has(m);
+    input.addEventListener("change", () => {
+      if (input.checked) visible.add(m); else visible.delete(m);
+      charts.forEach(c => { c.data.datasets.forEach(ds => { ds.hidden = !visible.has(ds.mode); }); c.update("none"); });
+    });
+    const key = document.createElement("span");
+    key.className = "key";
+    key.style.background = `var(${SLOT[m]})`;
+    label.append(input, key, document.createTextNode(DATA[m].stats.name + (DATA[m].stats.done ? "" : " (en cours)")));
+    legend.appendChild(label);
+  }
+}
+
+function setX(mode) {
+  xMode = mode;
+  try { localStorage.setItem("bench-x", mode); } catch (e) {}
+  document.getElementById("x-time").setAttribute("aria-pressed", String(mode === "time"));
+  document.getElementById("x-started").setAttribute("aria-pressed", String(mode === "started"));
+  charts.forEach(c => { c.data.datasets = datasetsFor(c._def); c.update("none"); });
+}
+
+document.getElementById("x-time").addEventListener("click", () => setX("time"));
+document.getElementById("x-started").addEventListener("click", () => setX("started"));
+
+if (!DATA || !modes.length) {
+  document.getElementById("charts").textContent = "Aucun résultat pour l'instant.";
+} else {
+  renderSummary();
+  renderPg();
+  renderLegend();
+  buildCharts();
+  setX(xMode);
+  // The grid settles after the first charts are created: resize once laid out.
+  requestAnimationFrame(() => charts.forEach(c => c.resize()));
+  // Theme changes: rebuild charts with the new tokens.
+  const rebuild = () => { buildCharts(); setX(xMode); requestAnimationFrame(() => charts.forEach(c => c.resize())); };
+  try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", rebuild); } catch (e) {}
+  new MutationObserver(rebuild).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+}
+</script>

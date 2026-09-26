@@ -1,0 +1,54 @@
+# Isolated stack for the workflow-start benchmark: Temporal on its own Postgres,
+# with pg_stat_statements enabled to measure insert/update times.
+#   docker compose -f bench/docker-compose.bench.yml -p temporal-bench up -d
+name: temporal-bench
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - max_connections=400
+      - -c
+      - shared_buffers=1GB
+    shm_size: 1g
+    ports: ["${BENCH_POSTGRES_PORT:-55433}:5432"]
+    volumes: [bench-pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 3s
+      retries: 30
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: postgres
+      # Shards are fixed at cluster creation: the auto-setup default (4) serializes writes too much.
+      NUM_HISTORY_SHARDS: "${BENCH_HISTORY_SHARDS:-128}"
+      SQL_MAX_CONNS: "50"
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/dynamic.yaml
+    volumes:
+      - ./temporal-bench-dynamic.yaml:/etc/temporal/config/dynamicconfig/dynamic.yaml:ro
+    ports: ["${BENCH_TEMPORAL_PORT:-17233}:7233"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address $$(hostname -i):7233 | grep -q SERVING"]
+      interval: 3s
+      retries: 100
+      start_period: 15s
+
+volumes:
+  bench-pg:
