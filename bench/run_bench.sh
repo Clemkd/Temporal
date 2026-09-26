@@ -9,7 +9,7 @@ BATCHES=("${@:-1 100 1000 10000}")
 ROOT=$(cd "$(dirname "$0")" && pwd)
 COMPOSE=(docker compose -f "$ROOT/docker-compose.bench.yml" -p temporal-bench)
 BENCH=(dotnet "$ROOT/StartBench/bin/Release/net10.0/StartBench.dll")
-PSQL=(docker exec temporal-bench-postgres-1 psql -U temporal -At)
+PSQL=(docker exec -i temporal-bench-postgres-1 psql -U temporal -At)
 
 (cd "$ROOT/StartBench" && dotnet build -c Release -v q -nologo >/dev/null)
 

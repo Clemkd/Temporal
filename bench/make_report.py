@@ -48,6 +48,8 @@ def parse_db_after(path):
             tables.append({"table": parts[0], "rows": int(parts[1]), "size": parts[2]})
         elif len(parts) == 3 and re.match(r"^[0-9.]+$", parts[0]):
             statements.append({"mean_ms": float(parts[0]), "calls": int(parts[1]), "query": parts[2]})
+    units = {"bytes": 1, "kB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3}
+    tables.sort(key=lambda t: -float(t["size"].split()[0]) * units.get(t["size"].split()[1], 1))
     return {"tables": tables, "statements": statements, "db_size_mb": size}
 
 
@@ -98,6 +100,13 @@ def load(label):
     weighted = sum(r["starts_per_s"] * r["lat_p50_ms"] for r in bench)
     total_started = b_started[-1]
     dbinfo = parse_db_after(os.path.join(d, "db_after.txt"))
+    if not dbinfo["tables"]:
+        # Snapshot taken just before the end of the run (see bench/README.md)
+        dbinfo = parse_db_after(os.path.join(d, "db_after_live.txt"))
+        live = os.path.join(d, "db_after_live.txt")
+        if os.path.exists(live):
+            m = re.search(r"started=(\d+)", open(live).read())
+            dbinfo["started"] = int(m.group(1)) if m else None
     final_size = dbinfo["db_size_mb"] or (metrics[-1]["db_size_mb"] if metrics else None)
     stats = {
         "label": label, "name": NAMES[label], "done": done,
@@ -123,6 +132,9 @@ def main():
     data = {k: v for k, v in data.items() if v}
     template = open(os.path.join(ROOT, "report_template.html")).read()
     html = template.replace("/*__DATA__*/null", json.dumps(data, separators=(",", ":")))
+    notes = os.path.join(ROOT, "report_notes.html")
+    if os.path.exists(notes):
+        html = html.replace("<!--__NOTES__-->", open(notes).read())
     out = os.path.join(ROOT, "report", "index.html")
     open(out, "w").write(html)
     for v in data.values():

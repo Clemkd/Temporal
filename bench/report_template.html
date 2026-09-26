@@ -116,7 +116,7 @@
             <th scope="col">INSERT moyen</th>
             <th scope="col">INSERT / démarrage</th>
             <th scope="col">Base finale</th>
-            <th scope="col">Erreurs</th>
+            <th scope="col">Appels relancés</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -222,7 +222,7 @@ function renderPg() {
   const tt = document.querySelector("#tables tbody"), st = document.querySelector("#statements tbody");
   tt.textContent = ""; st.textContent = "";
   if (!source) { document.getElementById("pg-source").textContent = "Disponible à la fin du premier mode."; return; }
-  const d = DATA[source].db, n = DATA[source].stats.count;
+  const d = DATA[source].db, n = d.started || DATA[source].stats.count;
   for (const t of d.tables.slice(0, 10)) {
     const tr = document.createElement("tr");
     cell(tr, t.table); cell(tr, nf.format(t.rows)); cell(tr, t.size);
@@ -230,13 +230,13 @@ function renderPg() {
   }
   for (const q of d.statements.slice(0, 8)) {
     const tr = document.createElement("tr");
-    const td = cell(tr, q.query.length > 64 ? q.query.slice(0, 64) + "…" : q.query);
+    const td = cell(tr, q.query.length > 38 ? q.query.slice(0, 38) + "…" : q.query);
     td.title = q.query;
     cell(tr, nf.format(q.calls)); cell(tr, nf3.format(q.mean_ms) + " ms");
     st.appendChild(tr);
   }
   document.getElementById("pg-source").textContent =
-    `Mesuré à la fin du mode « ${DATA[source].stats.name} » (${nf.format(n)} workflows démarrés, base « temporal »).`;
+    `Relevé pendant le mode « ${DATA[source].stats.name} », à ${nf.format(n)} workflows démarrés (bases temporal et temporal_visibility). Coût par démarrage : lignes ÷ ${nf.format(n)}.`;
 }
 
 const CHARTS = [
