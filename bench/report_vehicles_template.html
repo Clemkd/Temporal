@@ -1,4 +1,4 @@
-<title>Bench 1M démarrages</title>
+<title>Bench véhicules × jours</title>
 <style>
   :root {
     --page: #f9f9f7;
@@ -14,6 +14,7 @@
     --s2: #eb6834;
     --s3: #1baf7a;
     --s4: #eda100;
+    --s5: #e87ba4;
     --pill-run: #fdf1d6;
     --pill-run-ink: #7a5200;
     --pill-done: #e3f2e3;
@@ -24,7 +25,7 @@
       color-scheme: dark;
       --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a988f;
       --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10); --accent: #3987e5;
-      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
       --pill-run: #3a2e12; --pill-run-ink: #fab219; --pill-done: #12301a; --pill-done-ink: #0ca30c;
     }
   }
@@ -32,7 +33,7 @@
     color-scheme: dark;
     --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a988f;
     --grid: #2c2c2a; --axis: #383835; --ring: rgba(255, 255, 255, 0.10); --accent: #3987e5;
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
     --pill-run: #3a2e12; --pill-run-ink: #fab219; --pill-done: #12301a; --pill-done-ink: #0ca30c;
   }
 
@@ -75,6 +76,8 @@
   .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); }
   .legend label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
   .legend input { accent-color: var(--ink); margin: 0; }
+  select { font: inherit; font-size: 13px; color: var(--ink); background: var(--surface); border: 1px solid var(--axis); border-radius: 8px; padding: 5px 8px; }
+  select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .ctl-label { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.02em; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 14px; }
@@ -92,9 +95,9 @@
 
 <div class="wrap">
   <header>
-    <h1>Bench 1M démarrages de workflows Temporal</h1>
-    <p class="lede">Coût de la mise en task queue de workflows sur Temporal adossé à PostgreSQL, selon la façon de les démarrer : un par un, ou par paquets de 100, 1 000 et 10 000 appels simultanés. Chaque mode tourne 10 minutes (plafond 1 000 000 de démarrages).</p>
-    <p class="setup">Machine unique 4 vCPU / 15 Go (client, Temporal et Postgres ensemble) · Temporal 1.x auto-setup, 128 shards d'historique · PostgreSQL 17 · SDK .NET Temporalio 1.19 · aucun worker : chaque workflow reste en attente dans la file · base remise à zéro avant chaque mode · échantillonnage chaque seconde.</p>
+    <h1>Bench véhicules × jours sur Temporal</h1>
+    <p class="lede">Un workflow parent par véhicule (1 500), qui lance un workflow enfant par jour (jusqu'à 365, soit 547 500 enfants). Chaque jour exécute une activité. Trois cadences : les 365 jours d'un coup, 10 jours à la fois, ou 1 jour à la fois par véhicule. Votre approche « période » : chaque véhicule reçoit une période (ici 7 jours) et crée l'enfant du 1ᵉʳ jour, puis du 2ᵉ, en séquence. En comparaison, le même travail avec le jour traité comme une activité du workflow véhicule, sans workflow enfant. Chaque mode tourne 10 minutes.</p>
+    <p class="setup">Machine unique 4 vCPU / 15 Go (client, Temporal et Postgres ensemble) · Temporal 1.x auto-setup, 128 shards d'historique · PostgreSQL 17 · SDK .NET Temporalio 1.19 · un worker .NET dans le process du bench (200 activités et 200 tâches de workflow en parallèle, cache de 5 000 workflows) · activité simulée sans I/O · base remise à zéro avant chaque mode · échantillonnage chaque seconde.</p>
   </header>
 
   <section aria-labelledby="summary-title">
@@ -104,25 +107,27 @@
         <thead>
           <tr>
             <th scope="col">Mode</th>
-            <th scope="col">Démarrés</th>
+            <th scope="col">Jours traités</th>
+            <th scope="col">Véhicules terminés</th>
+            <th scope="col">Débit</th>
             <th scope="col">Durée</th>
-            <th scope="col">Débit moyen</th>
-            <th scope="col">Latence p50</th>
-            <th scope="col">p99 max</th>
-            <th scope="col">CPU Temporal moy.</th>
-            <th scope="col">CPU Postgres moy.</th>
+            <th scope="col">Estimé pour 547 500 jours</th>
+            <th scope="col">CPU Temporal</th>
+            <th scope="col">CPU Postgres</th>
+            <th scope="col">CPU worker</th>
             <th scope="col">RAM Temporal max</th>
             <th scope="col">RAM Postgres max</th>
+            <th scope="col">RAM worker max</th>
             <th scope="col">INSERT moyen</th>
-            <th scope="col">INSERT / démarrage</th>
-            <th scope="col">Base finale</th>
-            <th scope="col">Appels relancés</th>
+            <th scope="col">INSERT / jour</th>
+            <th scope="col">Base</th>
+            <th scope="col">Stockage / jour</th>
           </tr>
         </thead>
         <tbody></tbody>
       </table>
     </div>
-    <p class="setup">CPU en % d'un cœur (400 % = machine entière). RAM hors cache disque. Latence mesurée côté client par appel <code>StartWorkflow</code>. INSERT moyen : temps d'exécution Postgres (pg_stat_statements), pondéré par le nombre d'appels.</p>
+    <p class="setup">CPU : moyenne pendant le mode, en % d'un cœur (400 % = machine entière). RAM hors cache disque ; worker = RSS du process .NET. « Estimé » : durée pour traiter 547 500 jours (1 500 véhicules × 365) au débit mesuré. Stockage : taille des bases Temporal (dont visibilité) divisée par les jours traités, parents inclus.</p>
   </section>
 
   <section aria-labelledby="curves-title">
@@ -131,7 +136,7 @@
       <span class="ctl-label" id="xaxis-label">Axe horizontal</span>
       <div class="seg" role="group" aria-labelledby="xaxis-label">
         <button type="button" id="x-time" aria-pressed="true">Temps (min)</button>
-        <button type="button" id="x-started" aria-pressed="false">Workflows démarrés</button>
+        <button type="button" id="x-started" aria-pressed="false">Jours traités</button>
       </div>
       <span class="ctl-label">Modes</span>
       <div class="legend" id="legend"></div>
@@ -140,7 +145,11 @@
   </section>
 
   <section aria-labelledby="pg-title">
-    <h2 id="pg-title">Ce que coûte un démarrage dans PostgreSQL</h2>
+    <h2 id="pg-title">Ce que coûte un jour dans PostgreSQL</h2>
+    <div class="controls">
+      <label class="ctl-label" for="pg-mode">Mode</label>
+      <select id="pg-mode"></select>
+    </div>
     <div class="grid">
       <div class="card table-scroll">
         <table id="tables"><thead><tr><th scope="col">Table</th><th scope="col">Lignes insérées</th><th scope="col">Taille</th></tr></thead><tbody></tbody></table>
@@ -161,12 +170,12 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
 const DATA = /*__DATA__*/null;
-const ORDER = ["seq", "b100", "b1000", "b10000"];
-const SLOT = { seq: "--s1", b100: "--s2", b1000: "--s3", b10000: "--s4" };
+const ORDER = ["fanout", "w10", "w1", "period7", "actw10"];
+const SLOT = { fanout: "--s1", w10: "--s2", w1: "--s3", actw10: "--s4", period7: "--s5" };
 const modes = ORDER.filter(m => DATA && DATA[m]);
 const visible = new Set(modes);
 let xMode = "time";
-try { xMode = localStorage.getItem("bench-x") || "time"; } catch (e) {}
+try { xMode = localStorage.getItem("bench-veh-x") || "time"; } catch (e) {}
 
 const nf = new Intl.NumberFormat("fr-FR");
 const nf1 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 });
@@ -204,29 +213,41 @@ function renderSummary() {
     pill.textContent = s.done ? "terminé" : "en cours";
     first.appendChild(pill);
     tr.appendChild(first);
-    cell(tr, nf.format(s.count));
-    cell(tr, duration(s.elapsed_s));
-    cell(tr, nf.format(Math.round(s.rate)) + " /s");
-    cell(tr, nf1.format(s.p50_ms) + " ms");
-    cell(tr, nf.format(Math.round(s.p99_ms_max)) + " ms");
+    cell(tr, `${nf.format(s.days_done)} / ${nf.format(s.total)}`);
+    cell(tr, `${nf.format(s.vehicles_done)} / ${nf.format(s.vehicles)}`);
+    cell(tr, nf1.format(s.rate) + " jours/s");
+    cell(tr, duration(s.elapsed_s) + (s.complete ? " (terminé)" : ""));
+    cell(tr, s.eta_full_s ? "≈ " + duration(s.eta_full_s) : "–");
     cell(tr, nf.format(Math.round(s.temporal_cpu_avg)) + " %");
     cell(tr, nf.format(Math.round(s.postgres_cpu_avg)) + " %");
+    cell(tr, nf.format(Math.round(s.worker_cpu_avg)) + " %");
     cell(tr, nf.format(s.temporal_mem_max) + " Mo");
     cell(tr, nf.format(s.postgres_mem_max) + " Mo");
+    cell(tr, nf.format(s.worker_mem_max) + " Mo");
     cell(tr, nf3.format(s.insert_mean_ms) + " ms");
-    cell(tr, nf1.format(s.inserts_per_start));
+    cell(tr, nf1.format(s.inserts_per_day));
     cell(tr, s.db_size_mb ? nf.format(Math.round(s.db_size_mb)) + " Mo" : "–");
-    cell(tr, nf.format(s.errors));
+    cell(tr, s.kb_per_day ? nf1.format(s.kb_per_day) + " Ko" : "–");
     tbody.appendChild(tr);
   }
 }
 
-function renderPg() {
-  const source = [...modes].reverse().find(m => DATA[m].db.tables.length) || null;
+function renderPg(source) {
+  const select = document.getElementById("pg-mode");
+  if (!select.options.length) {
+    for (const m of modes.filter(m => DATA[m].db.tables.length)) {
+      const o = document.createElement("option");
+      o.value = m; o.textContent = DATA[m].stats.name;
+      select.appendChild(o);
+    }
+    select.value = modes.includes("w1") ? "w1" : select.value;
+    select.addEventListener("change", () => renderPg(select.value));
+  }
+  source = source || select.value || null;
   const tt = document.querySelector("#tables tbody"), st = document.querySelector("#statements tbody");
   tt.textContent = ""; st.textContent = "";
   if (!source) { document.getElementById("pg-source").textContent = "Disponible à la fin du premier mode."; return; }
-  const d = DATA[source].db, n = d.started || DATA[source].stats.count;
+  const d = DATA[source].db, n = DATA[source].stats.days_done;
   for (const t of d.tables.slice(0, 10)) {
     const tr = document.createElement("tr");
     cell(tr, t.table); cell(tr, nf.format(t.rows)); cell(tr, t.size);
@@ -240,19 +261,21 @@ function renderPg() {
     st.appendChild(tr);
   }
   document.getElementById("pg-source").textContent =
-    `Relevé pendant le mode « ${DATA[source].stats.name} », à ${nf.format(n)} workflows démarrés (bases temporal et temporal_visibility). Coût par démarrage : lignes ÷ ${nf.format(n)}.`;
+    `Relevé à la fin du mode « ${DATA[source].stats.name} », après ${nf.format(n)} jours traités (bases temporal et temporal_visibility). Coût par jour : lignes ÷ ${nf.format(n)}.`;
 }
 
 const CHARTS = [
-  { src: "bench", key: "starts_per_s", title: "Démarrages par seconde", note: "Workflows mis en file par seconde, vus du client." },
-  { src: "bench", key: "lat_p50_ms", title: "Latence d'un démarrage, médiane", note: "Temps d'un appel StartWorkflow côté client, échelle logarithmique.", unit: "ms", log: true },
-  { src: "bench", key: "lat_p99_ms", title: "Latence d'un démarrage, p99", note: "99 % des appels sont plus rapides, échelle logarithmique.", unit: "ms", log: true },
+  { src: "bench", key: "days_per_s", title: "Jours traités par seconde", note: "Workflows enfants (jour) terminés par seconde." },
+  { src: "bench", key: "days_done", title: "Jours traités, cumul", note: "Sur 547 500 au total (1 500 véhicules × 365 jours)." },
+  { src: "bench", key: "vehicles_done", title: "Véhicules terminés", note: "Workflows parents dont les 365 jours sont traités (compté toutes les 5 s)." },
   { src: "metrics", key: "postgres_cpu_pct", title: "CPU Postgres", note: "En % d'un cœur, 400 % = les 4 vCPU.", unit: "%" },
-  { src: "metrics", key: "temporal_cpu_pct", title: "CPU Temporal", note: "En % d'un cœur (frontend, history et matching dans un même process).", unit: "%" },
+  { src: "metrics", key: "temporal_cpu_pct", title: "CPU Temporal", note: "Frontend, history et matching dans un même process.", unit: "%" },
+  { src: "metrics", key: "worker_cpu_pct", title: "CPU du worker .NET", note: "Exécution des workflows (parents et enfants) et des activités.", unit: "%" },
   { src: "metrics", key: "postgres_mem_mb", title: "RAM Postgres", note: "Hors cache disque ; shared_buffers = 1 Go.", unit: "Mo" },
   { src: "metrics", key: "temporal_mem_mb", title: "RAM Temporal", note: "Hors cache disque.", unit: "Mo" },
+  { src: "metrics", key: "worker_mem_mb", title: "RAM du worker .NET", note: "RSS du process ; les workflows parents en cours restent en cache.", unit: "Mo" },
   { src: "metrics", key: "insert_mean_ms", title: "Temps moyen d'un INSERT Postgres", note: "Temps d'exécution côté serveur, moyenne par intervalle.", unit: "ms" },
-  { src: "metrics", key: "insert_per_s", title: "INSERT par seconde", note: "Toutes tables confondues (exécutions, historique, tâches, visibilité)." },
+  { src: "metrics", key: "insert_per_s", title: "INSERT par seconde", note: "Toutes tables confondues." },
   { src: "metrics", key: "commits_per_s", title: "Transactions validées par seconde", note: "Inclut les lectures des processeurs de files des shards." },
   { src: "metrics", key: "db_size_mb", title: "Taille des bases Temporal", note: "temporal + temporal_visibility, hors WAL.", unit: "Mo" },
 ];
@@ -324,7 +347,7 @@ const endLabels = {
   },
 };
 
-const SHORT = { seq: "1×1", b100: "×100", b1000: "×1 000", b10000: "×10 000" };
+const SHORT = { fanout: "365", w10: "×10", w1: "×1", actw10: "act ×10", period7: "7 j" };
 const charts = [];
 
 function datasetsFor(def) {
@@ -390,7 +413,7 @@ function buildCharts() {
             borderColor: axis, borderWidth: 1, padding: 10, boxWidth: 14, boxHeight: 2, usePointStyle: false,
             titleFont: { weight: "500", size: 12 }, bodyFont: { weight: "600", size: 13 },
             callbacks: {
-              title: items => items.length ? (xMode === "time" ? `${nf1.format(items[0].parsed.x)} min` : `${nf.format(Math.round(items[0].parsed.x))} démarrés`) : "",
+              title: items => items.length ? (xMode === "time" ? `${nf1.format(items[0].parsed.x)} min` : `${nf.format(Math.round(items[0].parsed.x))} jours traités`) : "",
               label: it => `${fmtY(def, it.parsed.y)}  ${it.dataset.label}`,
               labelColor: it => ({ borderColor: it.dataset.borderColor, backgroundColor: it.dataset.borderColor, borderWidth: 0 }),
             },
@@ -442,7 +465,7 @@ function renderLegend() {
 
 function setX(mode) {
   xMode = mode;
-  try { localStorage.setItem("bench-x", mode); } catch (e) {}
+  try { localStorage.setItem("bench-veh-x", mode); } catch (e) {}
   document.getElementById("x-time").setAttribute("aria-pressed", String(mode === "time"));
   document.getElementById("x-started").setAttribute("aria-pressed", String(mode === "started"));
   charts.forEach(c => { c.data.datasets = datasetsFor(c._def); c.update("none"); });

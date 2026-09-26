@@ -6,11 +6,24 @@ Samples every second until killed:
       INSERT calls/s and mean INSERT time (ms), UPDATE mean time, commits/s, rows inserted/s, DB size.
 Usage: sampler.py <out.csv> [--pg-port 55433]
 """
-import http.client, json, socket, sys, time
+import http.client, json, os, socket, sys, time
 import psycopg2
 
 OUT = sys.argv[1]
 PG_PORT = int(sys.argv[sys.argv.index("--pg-port") + 1]) if "--pg-port" in sys.argv else 55433
+# Optional: also sample a local process (e.g. the benchmark worker) - CPU from /proc/<pid>/stat, RSS.
+PID = int(sys.argv[sys.argv.index("--pid") + 1]) if "--pid" in sys.argv else None
+CLK = os.sysconf("SC_CLK_TCK")
+
+
+def process_stats(pid):
+    try:
+        fields = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()
+        cpu_ns = (int(fields[11]) + int(fields[12])) / CLK * 1e9
+        rss_mb = int(open(f"/proc/{pid}/statm").read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1024 / 1024
+        return cpu_ns, rss_mb
+    except (FileNotFoundError, ProcessLookupError, IndexError):
+        return 0, 0
 CONTAINERS = {"temporal": "temporal-bench-temporal-1", "postgres": "temporal-bench-postgres-1"}
 
 
@@ -54,7 +67,8 @@ def main():
     t0 = time.time()
     with open(OUT, "w") as f:
         f.write("ts,elapsed_s,temporal_cpu_pct,temporal_mem_mb,postgres_cpu_pct,postgres_mem_mb,"
-                "insert_per_s,insert_mean_ms,update_per_s,update_mean_ms,commits_per_s,rows_inserted_per_s,db_size_mb\n")
+                "insert_per_s,insert_mean_ms,update_per_s,update_mean_ms,commits_per_s,rows_inserted_per_s,db_size_mb,"
+                "worker_cpu_pct,worker_mem_mb\n")
         next_tick = time.time()
         while True:
             now = time.time()
@@ -62,7 +76,8 @@ def main():
             pc, pm = container_stats(CONTAINERS["postgres"])
             cur.execute(PG_SQL)
             ins_calls, ins_time, upd_calls, upd_time, commits, tup_ins, size = [float(x or 0) for x in cur.fetchone()]
-            sample = (now, tc, pc, ins_calls, ins_time, upd_calls, upd_time, commits, tup_ins)
+            wc, wm = process_stats(PID) if PID else (0, 0)
+            sample = (now, tc, pc, ins_calls, ins_time, upd_calls, upd_time, commits, tup_ins, wc)
             if prev:
                 dt = now - prev[0]
                 d = [a - b for a, b in zip(sample, prev)]
@@ -73,6 +88,7 @@ def main():
                     f"{d[3] / dt:.0f}", f"{(d[4] / d[3]) if d[3] > 0 else 0:.4f}",
                     f"{d[5] / dt:.0f}", f"{(d[6] / d[5]) if d[5] > 0 else 0:.4f}",
                     f"{d[7] / dt:.0f}", f"{d[8] / dt:.0f}", f"{size / 1024 / 1024:.0f}",
+                    f"{max(0, d[9]) / 1e9 / dt * 100 if wc else 0:.1f}", f"{wm:.0f}",
                 ]
                 f.write(",".join(row) + "\n")
                 f.flush()

@@ -186,7 +186,11 @@ const nf1 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 1 });
 const nf3 = new Intl.NumberFormat("fr-FR", { maximumFractionDigits: 3 });
 const compact = v => v >= 1e6 ? nf1.format(v / 1e6) + " M" : v >= 1e3 ? nf1.format(v / 1e3) + " k" : nf.format(Math.round(v));
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const duration = s => s >= 3600 ? `${Math.floor(s / 3600)} h ${String(Math.round((s % 3600) / 60)).padStart(2, "0")}` : s >= 60 ? `${Math.floor(s / 60)} min ${String(Math.round(s % 60)).padStart(2, "0")}` : `${nf1.format(s)} s`;
+const duration = s => {
+  if (s >= 3600) { const m = Math.round(s / 60); return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}`; }
+  if (s >= 60) { const r = Math.round(s); return `${Math.floor(r / 60)} min ${String(r % 60).padStart(2, "0")}`; }
+  return `${nf1.format(s)} s`;
+};
 
 function cell(tr, text) { const td = document.createElement("td"); td.textContent = text; tr.appendChild(td); return td; }
 

@@ -12,3 +12,5 @@ bench/results/
 bench/run.log
 bench/results-long-b100/
 bench/run2.log
+bench/results-vehicles/
+bench/run-vehicles*.log
