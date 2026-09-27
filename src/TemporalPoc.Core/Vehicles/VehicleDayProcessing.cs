@@ -32,6 +32,8 @@ public sealed class MeasurementVehicleDayProcessor(PocDbContext db, ChaosMonkey 
             throw new VehicleBusinessException($"Vehicle {vehicleId} has no valid configuration");
         }
 
+        // Demo: the day is taken in UTC. With an operating day in another time zone / start hour, compute the
+        // bounds with the same rule as VehicleProcessingWorkflow.OperatingDayOf.
         var start = new DateTimeOffset(day.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
         var end = start.AddDays(1);
         var values = await db.Measurements.AsNoTracking()
@@ -40,7 +42,10 @@ public sealed class MeasurementVehicleDayProcessor(PocDbContext db, ChaosMonkey 
             .ToListAsync(ct);
 
         var now = DateTimeOffset.UtcNow;
+        // One transaction for result + status: either both are written or none (a crash in between is rolled back
+        // by Postgres, and the retried attempt starts from a clean state).
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // Delete + insert = replace: processing the same day again never duplicates its result (idempotent).
         await db.VehicleDayResults.Where(r => r.VehicleId == vehicleId && r.Day == day).ExecuteDeleteAsync(ct);
         db.VehicleDayResults.Add(new VehicleDayResult
         {
@@ -59,8 +64,8 @@ public sealed class MeasurementVehicleDayProcessor(PocDbContext db, ChaosMonkey 
             db.VehicleDayRuns.Add(run);
         }
         run.Status = VehicleDayStatus.Succeeded;
-        run.Attempts = attempt;
-        run.Runs++;
+        run.Attempts = attempt;   // attempts of the LAST processing (1 = succeeded the first time)
+        run.Runs++;               // how many times this day has been processed in total
         run.RequestIds = string.Join(',', requestIds);
         run.ErrorType = null;
         run.Error = null;

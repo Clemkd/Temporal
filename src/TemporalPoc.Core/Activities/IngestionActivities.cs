@@ -313,6 +313,8 @@ public sealed class IngestionActivities(IObjectStore store, PocDbContext db, Cha
         var readings = ctx.ConvertedKey is not null ? await ReadConvertedAsync(ctx.ConvertedKey) : (await ParseAsync(ctx, int.MaxValue)).Readings;
         var settings = new Vehicles.VehicleProcessingSettings();
         var zone = TimeZoneInfo.FindSystemTimeZoneById(step.Parameters.GetValueOrDefault("timeZone", settings.OperatingTimeZone));
+        // One event per (vehicle, operating day) present in the file, not per row: a file of 10 000 rows for one
+        // vehicle and one day sends a single signal.
         var events = readings
             .Select(r => (Vehicle: r.SensorId, Day: Vehicles.VehicleProcessingWorkflow.OperatingDayOf(r.Timestamp.UtcDateTime, zone, settings.OperatingDayStartHour)))
             .Distinct()

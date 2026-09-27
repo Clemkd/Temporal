@@ -12,7 +12,10 @@ public static class RetryBackoff
     public static TimeSpan Next(int attempt, TimeSpan initial, TimeSpan max, double coefficient, Random random)
     {
         var exponent = Math.Max(0, attempt - 1);
+        // initial x coefficient^(attempt-1), capped: 2 s, 4 s, 8 s, 16 s, 32 s... up to max.
         var baseMs = Math.Min(max.TotalMilliseconds, initial.TotalMilliseconds * Math.Pow(coefficient, exponent));
+        // Equal jitter: a random delay in [base/2, base]. Keeps a minimum wait (unlike "full jitter" in [0, base])
+        // while spreading the retries of many vehicles failing at the same moment.
         var half = baseMs / 2;
         return TimeSpan.FromMilliseconds(half + random.NextDouble() * half);
     }

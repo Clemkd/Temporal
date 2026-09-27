@@ -53,6 +53,7 @@ public sealed class FleetActivities(ITemporalClient client, IVehicleRegistry reg
     {
         var ctx = ActivityExecutionContext.Current;
         var sent = 0;
+        // At most 10 calls in flight towards the Temporal server.
         await Parallel.ForEachAsync(input.VehicleIds, new ParallelOptions { MaxDegreeOfParallelism = 10, CancellationToken = ctx.CancellationToken }, async (vehicleId, _) =>
         {
             await VehicleWorkflowClient.SubmitSignalAsync(client, input.Template with { VehicleId = vehicleId }, input.VehicleTaskQueue);
@@ -87,15 +88,18 @@ public sealed class FleetRequestWorkflow
             RetryPolicy = new RetryPolicy { InitialInterval = TimeSpan.FromSeconds(1), MaximumInterval = TimeSpan.FromMinutes(1), MaximumAttempts = 0 },
         };
 
+        // Sorted + ordinal comparer: removes duplicates and gives a stable order (deterministic batches on replay).
         var vehicles = new SortedSet<string>(input.VehicleIds ?? [], StringComparer.Ordinal);
         if (input.AllKnownVehicles)
         {
+            // The list is read by an activity (I/O) and recorded in the history: a replay reuses it as is.
             vehicles.UnionWith(await Workflow.ExecuteActivityAsync((FleetActivities a) => a.ResolveVehiclesAsync(), options));
         }
         var list = vehicles.ToList();
         _vehicles = list.Count;
 
         var batchSize = Math.Max(1, input.VehiclesPerSecond);
+        // Same RequestId for every vehicle: each vehicle workflow dedups it on its own.
         var template = new ProcessingRequest(input.RequestId, "", input.From, input.To, input.Priority, input.Reason);
         for (var offset = 0; offset < list.Count; offset += batchSize)
         {
@@ -104,7 +108,8 @@ public sealed class FleetRequestWorkflow
                 (FleetActivities a) => a.SubmitBatchAsync(new SubmitBatchInput(batch, template, input.VehicleTaskQueue)), options);
             if (offset + batchSize < list.Count)
             {
-                await Workflow.DelayAsync(TimeSpan.FromSeconds(1));   // pace: VehiclesPerSecond
+                // Durable timer: survives a worker restart. One batch per second = VehiclesPerSecond.
+                await Workflow.DelayAsync(TimeSpan.FromSeconds(1));
             }
         }
         return Progress;

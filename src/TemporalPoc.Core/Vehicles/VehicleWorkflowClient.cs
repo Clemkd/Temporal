@@ -12,6 +12,7 @@ public static class VehicleWorkflowClient
     {
         for (var attempt = 1; ; attempt++)
         {
+            // Describes the workflow to start if none is running. Recreated at each attempt: an operation can be used once.
             var start = WithStartWorkflowOperation.Create(
                 (VehicleProcessingWorkflow wf) => wf.RunAsync(new VehicleWorkflowInput(request.VehicleId, null, null)),
                 StartOptions(request.VehicleId));
@@ -21,6 +22,7 @@ public static class VehicleWorkflowClient
                     (VehicleProcessingWorkflow wf) => wf.SubmitAsync(request),
                     new WorkflowUpdateWithStartOptions { StartWorkflowOperation = start });
             }
+            // Rare race: the update reached a run that was completing (idle timeout). Retrying starts a new run.
             catch (Exception e) when (attempt < 3 && e is WorkflowUpdateRpcTimeoutOrCanceledException or RpcException { Code: RpcException.StatusCode.NotFound })
             {
                 // The workflow was completing (idle) at that moment: the same RequestId makes the retry safe.
@@ -40,6 +42,8 @@ public static class VehicleWorkflowClient
     private static Task SignalWithStartAsync(ITemporalClient client, string vehicleId, string signal, object arg, string? taskQueue = null)
     {
         var options = StartOptions(vehicleId, taskQueue);
+        // StartSignal turns StartWorkflowAsync into Signal-With-Start: one atomic server call that starts the
+        // workflow if needed AND delivers the signal (no race between "is it running?" and "start it").
         options.StartSignal = signal;
         options.StartSignalArgs = [arg];
         return client.StartWorkflowAsync((VehicleProcessingWorkflow wf) => wf.RunAsync(new VehicleWorkflowInput(vehicleId, null, null)), options);

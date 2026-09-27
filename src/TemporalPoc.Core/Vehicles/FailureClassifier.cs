@@ -15,10 +15,11 @@ public static class FailureClassifier
     {
         TimeoutException or IOException or SocketException or HttpRequestException => true,
         TransientChaosException => true,
-        NpgsqlException npgsql => npgsql.IsTransient,
-        DbUpdateConcurrencyException => true,
-        DbUpdateException { InnerException: { } inner } => IsTransient(inner),
+        NpgsqlException npgsql => npgsql.IsTransient,          // Npgsql knows which errors are transient (connection, failover...)
+        DbUpdateConcurrencyException => true,                  // concurrent write: a new attempt re-reads the data
+        DbUpdateException { InnerException: { } inner } => IsTransient(inner),   // EF wraps the provider exception
         InvalidOperationException { InnerException: { } inner } => IsTransient(inner),   // EF wraps provider errors
+        // Transient only if EVERY inner error is (one functional error makes the whole failure non transient).
         AggregateException aggregate => aggregate.InnerExceptions.Count > 0 && aggregate.InnerExceptions.All(IsTransient),
         _ => false,
     };
