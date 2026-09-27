@@ -8,6 +8,7 @@ using TemporalPoc.Core.Configuration;
 using TemporalPoc.Core.Data;
 using TemporalPoc.Core.Pipelines;
 using TemporalPoc.Core.Storage;
+using TemporalPoc.Core.Vehicles;
 using TemporalPoc.Core.Workflows;
 
 namespace TemporalPoc.Core;
@@ -36,6 +37,8 @@ public static class ServiceCollectionExtensions
             configuration.GetConnectionString("Postgres") ?? "Host=localhost;Port=55432;Database=temporal_poc;Username=poc;Password=poc",
             npgsql => npgsql.EnableRetryOnFailure(0)));
         services.AddScoped<PipelineRepository>();
+        services.AddScoped<IVehicleDayProcessor, MeasurementVehicleDayProcessor>();
+        services.AddScoped<IVehicleDayRunStore, EfVehicleDayRunStore>();
 
         // Lazy client: the process starts even if Temporal is not reachable yet.
         services.AddTemporalClient(temporal.Address, temporal.Namespace);
@@ -69,6 +72,11 @@ public static class ServiceCollectionExtensions
                     case TaskQueues.Control:
                         builder.AddWorkflow<InboxWatcherWorkflow>()
                             .AddScopedActivities<DispatchActivities>();
+                        break;
+                    case TaskQueues.VehicleProcessing:
+                        // Separate queue: bulk reprocessing never delays file ingestion.
+                        builder.AddWorkflow<VehicleProcessingWorkflow>()
+                            .AddScopedActivities<VehicleDayActivities>();
                         break;
                     default:
                         throw new InvalidOperationException($"Unknown task queue '{queue}'");

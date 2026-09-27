@@ -29,6 +29,7 @@ app.MapWatcherEndpoints();
 app.MapPipelineEndpoints();
 app.MapProcessingEndpoints();
 app.MapOperationsEndpoints();
+app.MapVehicleEndpoints();
 
 app.Run();
 

@@ -103,3 +103,36 @@ public sealed class PipelineDefinitionRecord
     public string? Comment { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
+
+public static class VehicleDayStatus
+{
+    public const string Succeeded = "Succeeded";
+    public const string Failed = "Failed";
+}
+
+/// <summary>Last processing status of a (vehicle, day). One row per pair, overwritten on each processing.</summary>
+public sealed class VehicleDayRun
+{
+    public string VehicleId { get; set; } = "";
+    public DateOnly Day { get; set; }
+    public string Status { get; set; } = VehicleDayStatus.Succeeded;
+    public int Attempts { get; set; }
+    public int Runs { get; set; }
+    public string? RequestIds { get; set; }
+    public string? ErrorType { get; set; }
+    public string? Error { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+    public DateTimeOffset? SucceededAt { get; set; }
+}
+
+/// <summary>Result of the processing of a (vehicle, day): replaced on every reprocessing (idempotent).</summary>
+public sealed class VehicleDayResult
+{
+    public string VehicleId { get; set; } = "";
+    public DateOnly Day { get; set; }
+    public int MeasurementCount { get; set; }
+    public double? Min { get; set; }
+    public double? Max { get; set; }
+    public double? Avg { get; set; }
+    public DateTimeOffset ComputedAt { get; set; }
+}

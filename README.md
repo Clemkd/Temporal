@@ -195,6 +195,10 @@ et lance un job de traitement pendant l'ingestion. Il vérifie ensuite ces invar
 
 Voir [RESULTS.md](RESULTS.md) pour les mesures obtenues.
 
+## Traitement par véhicule sur une plage de temps
+
+Un workflow par véhicule qui traite des plages de jours demandées à tout moment (fusion des jours dupliqués, priorités, relances transitoires avec jitter, pas de relance des erreurs métier) : voir [docs/vehicle-processing.md](docs/vehicle-processing.md).
+
 ## Points d'attention pour aller plus loin
 
 - **Versioning du code des workflows** : modifier la logique d'un workflow en cours d'exécution demande `Workflow.Patched(...)` ou le Worker Versioning (build ids). Le POC montre la variante « configuration », avec des étapes versionnées en base.

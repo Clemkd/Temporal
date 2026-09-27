@@ -10,6 +10,8 @@ public sealed class PocDbContext(DbContextOptions<PocDbContext> options) : DbCon
     public DbSet<ProcessingResult> ProcessingResults => Set<ProcessingResult>();
     public DbSet<ProcessingJob> ProcessingJobs => Set<ProcessingJob>();
     public DbSet<PipelineDefinitionRecord> Pipelines => Set<PipelineDefinitionRecord>();
+    public DbSet<VehicleDayRun> VehicleDayRuns => Set<VehicleDayRun>();
+    public DbSet<VehicleDayResult> VehicleDayResults => Set<VehicleDayResult>();
 
     protected override void OnModelCreating(ModelBuilder model)
     {
@@ -47,6 +49,19 @@ public sealed class PocDbContext(DbContextOptions<PocDbContext> options) : DbCon
         {
             e.ToTable("processing_jobs");
             e.HasKey(x => x.JobId);
+        });
+
+        model.Entity<VehicleDayRun>(e =>
+        {
+            e.ToTable("vehicle_day_runs");
+            e.HasKey(x => new { x.VehicleId, x.Day });
+            e.HasIndex(x => x.Status);
+        });
+
+        model.Entity<VehicleDayResult>(e =>
+        {
+            e.ToTable("vehicle_day_results");
+            e.HasKey(x => new { x.VehicleId, x.Day });
         });
 
         model.Entity<PipelineDefinitionRecord>(e =>
