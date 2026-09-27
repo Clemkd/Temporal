@@ -39,6 +39,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<PipelineRepository>();
         services.AddScoped<IVehicleDayProcessor, MeasurementVehicleDayProcessor>();
         services.AddScoped<IVehicleDayRunStore, EfVehicleDayRunStore>();
+        services.AddScoped<IVehicleRegistry, ProcessedVehicleRegistry>();
 
         // Lazy client: the process starts even if Temporal is not reachable yet.
         services.AddTemporalClient(temporal.Address, temporal.Namespace);
@@ -71,12 +72,19 @@ public static class ServiceCollectionExtensions
                         break;
                     case TaskQueues.Control:
                         builder.AddWorkflow<InboxWatcherWorkflow>()
-                            .AddScopedActivities<DispatchActivities>();
+                            .AddScopedActivities<DispatchActivities>()
+                            // Fleet fan-out on the control queue: never queued behind the day processings it creates.
+                            .AddWorkflow<FleetRequestWorkflow>()
+                            .AddScopedActivities<FleetActivities>();
                         break;
                     case TaskQueues.VehicleProcessing:
                         // Separate queue: bulk reprocessing never delays file ingestion.
                         builder.AddWorkflow<VehicleProcessingWorkflow>()
                             .AddScopedActivities<VehicleDayActivities>();
+                        break;
+                    case TaskQueues.VehicleRealtime:
+                        // Current operating day only: its own slots, never queued behind a mass reprocessing.
+                        builder.AddScopedActivities<VehicleDayActivities>();
                         break;
                     default:
                         throw new InvalidOperationException($"Unknown task queue '{queue}'");

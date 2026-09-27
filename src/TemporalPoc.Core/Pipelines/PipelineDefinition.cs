@@ -56,6 +56,7 @@ public static class StepCatalog
         public const string Convert = "ingest.convert";
         public const string Store = "ingest.store";
         public const string Delay = "ingest.delay";
+        public const string NotifyVehicles = "ingest.notify-vehicles";
     }
 
     public static class Processing
@@ -69,7 +70,7 @@ public static class StepCatalog
 
     public static readonly IReadOnlyDictionary<string, string[]> ByPipelineKind = new Dictionary<string, string[]>
     {
-        ["ingestion"] = [Ingestion.Fetch, Ingestion.Validate, Ingestion.Convert, Ingestion.Store, Ingestion.Delay],
+        ["ingestion"] = [Ingestion.Fetch, Ingestion.Validate, Ingestion.Convert, Ingestion.Store, Ingestion.Delay, Ingestion.NotifyVehicles],
         ["processing"] = [Processing.Categorize, Processing.UpdateMeasurements, Processing.InsertResults, Processing.Cleanup, Processing.Delay],
     };
 

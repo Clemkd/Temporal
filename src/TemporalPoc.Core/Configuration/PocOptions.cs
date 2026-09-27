@@ -16,8 +16,9 @@ public static class TaskQueues
     public const string Processing = "sensor-processing";
     public const string Control = "control";
     public const string VehicleProcessing = "vehicle-processing";
+    public const string VehicleRealtime = "vehicle-realtime";
 
-    public static readonly string[] All = [Ingestion, Processing, Control, VehicleProcessing];
+    public static readonly string[] All = [Ingestion, Processing, Control, VehicleProcessing, VehicleRealtime];
 }
 
 /// <summary>Worker settings. The same binary can run as API only, worker only or both.</summary>

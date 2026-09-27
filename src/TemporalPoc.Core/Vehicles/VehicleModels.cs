@@ -11,6 +11,13 @@ public sealed record ProcessingRequest(
     int Priority = 0,
     string? Reason = null);
 
+/// <summary>
+/// Real time event: a file was received for this vehicle. The day is the day of the data in the file.
+/// Current operating day: at most one processing per minute. Other day (late file): daily limit (1/hour).
+/// </summary>
+/// <param name="EventId">Idempotency key (e.g. the file key): the same event delivered twice counts once.</param>
+public sealed record FileReceivedEvent(string EventId, string VehicleId, DateOnly Day, string? FileKey = null);
+
 /// <summary>Result of a submission, returned by the update (Update-With-Start).</summary>
 public sealed record SubmitAck(
     string RequestId,
@@ -44,6 +51,28 @@ public sealed record VehicleProcessingSettings
 
     public DayOrder Order { get; init; } = DayOrder.MostRecentFirst;
 
+    /// <summary>Minimum time between two processings of the CURRENT operating day (real time files).</summary>
+    public TimeSpan RealtimeMinInterval { get; init; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>Minimum time between two processings of any OTHER day (daily, mass, late files).</summary>
+    public TimeSpan DailyMinInterval { get; init; } = TimeSpan.FromHours(1);
+
+    /// <summary>Time zone of the operating day (IANA or Windows id).</summary>
+    public string OperatingTimeZone { get; init; } = "Europe/Paris";
+
+    /// <summary>Hour at which the operating day starts (0 = midnight, 4 = the day runs from 04:00 to 04:00).</summary>
+    public int OperatingDayStartHour { get; init; }
+
+    /// <summary>Priority given to a file of the current operating day, and to a late file.</summary>
+    public int RealtimePriority { get; init; } = 10;
+
+    /// <summary>
+    /// Activity task queue of the CURRENT operating day (null = the workflow's queue). Task queues are served
+    /// roughly in arrival order: a separate queue keeps real time processing from waiting behind a mass one.
+    /// </summary>
+    public string? RealtimeTaskQueue { get; init; } = Configuration.TaskQueues.VehicleRealtime;
+    public int LateFilePriority { get; init; } = 5;
+
     public TimeSpan DayTimeout { get; init; } = TimeSpan.FromMinutes(10);
     public TimeSpan HeartbeatTimeout { get; init; } = TimeSpan.FromMinutes(1);
 
@@ -57,6 +86,12 @@ public sealed record VehicleProcessingSettings
 /// <summary>A day waiting to be processed (possibly requested by several requests).</summary>
 public sealed record PendingDay(DateOnly Day, int Priority, DateTime FirstRequestedAt, List<string> RequestIds);
 
+/// <summary>Pending day as shown by the status query.</summary>
+public sealed record PendingDayView(DateOnly Day, int Priority, DateTime EligibleAt, bool CurrentOperatingDay, IReadOnlyList<string> RequestIds);
+
+/// <summary>Start time of the last processing of a day (drives the minimum intervals).</summary>
+public sealed record DayStart(DateOnly Day, DateTime StartedAt);
+
 /// <summary>Failed day kept in the status (bounded list).</summary>
 public sealed record FailedDay(DateOnly Day, string ErrorType, string Message, int Attempts, DateTime FailedAt);
 
@@ -66,6 +101,7 @@ public sealed record VehicleWorkflowState
     public List<PendingDay> Pending { get; init; } = [];
     public List<string> RecentRequestIds { get; init; } = [];
     public List<FailedDay> RecentFailures { get; init; } = [];
+    public List<DayStart> LastStarts { get; init; } = [];
     public long Succeeded { get; init; }
     public long Failed { get; init; }
     public int Runs { get; init; } = 1;
@@ -91,9 +127,10 @@ public sealed record VehicleDayFailure(string VehicleId, DateOnly Day, IReadOnly
 
 public sealed record VehicleStatus(
     string VehicleId,
+    DateOnly OperatingDay,
     DateOnly? InProgress,
     int PendingCount,
-    IReadOnlyList<PendingDay> NextDays,
+    IReadOnlyList<PendingDayView> NextDays,
     long Succeeded,
     long Failed,
     IReadOnlyList<FailedDay> RecentFailures,

@@ -19,7 +19,7 @@ namespace TemporalPoc.Core.Activities;
 /// Activities of the file ingestion pipeline. All of them are idempotent: they can be executed again
 /// after a crash at any point (after the side effect but before Temporal recorded the completion).
 /// </summary>
-public sealed class IngestionActivities(IObjectStore store, PocDbContext db, ChaosMonkey chaos, ILogger<IngestionActivities> logger)
+public sealed class IngestionActivities(IObjectStore store, PocDbContext db, ChaosMonkey chaos, ILogger<IngestionActivities> logger, Temporalio.Client.ITemporalClient client)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -299,6 +299,32 @@ public sealed class IngestionActivities(IObjectStore store, PocDbContext db, Cha
     {
         await HeartbeatingDelayAsync(TimeSpan.FromSeconds(GetLong(step.Parameters, "seconds", 5)));
         return step.Context;
+    }
+
+    /// <summary>
+    /// Optional step (after store): tells each vehicle present in the file that data arrived for a day
+    /// (real time processing). Demo mapping: vehicle id = sensor id. Event id = file + vehicle + day, so a
+    /// retried step never produces a second event.
+    /// </summary>
+    [Activity("ingest.notify-vehicles")]
+    public async Task<FileContext> NotifyVehiclesAsync(StepInvocation step)
+    {
+        var ctx = step.Context;
+        var readings = ctx.ConvertedKey is not null ? await ReadConvertedAsync(ctx.ConvertedKey) : (await ParseAsync(ctx, int.MaxValue)).Readings;
+        var settings = new Vehicles.VehicleProcessingSettings();
+        var zone = TimeZoneInfo.FindSystemTimeZoneById(step.Parameters.GetValueOrDefault("timeZone", settings.OperatingTimeZone));
+        var events = readings
+            .Select(r => (Vehicle: r.SensorId, Day: Vehicles.VehicleProcessingWorkflow.OperatingDayOf(r.Timestamp.UtcDateTime, zone, settings.OperatingDayStartHour)))
+            .Distinct()
+            .Select(x => new Vehicles.FileReceivedEvent($"{ctx.RelativeKey}|{x.Vehicle}|{x.Day:yyyy-MM-dd}", x.Vehicle, x.Day, ctx.RelativeKey))
+            .ToList();
+        var sent = 0;
+        await Parallel.ForEachAsync(events, new ParallelOptions { MaxDegreeOfParallelism = 16, CancellationToken = Ct }, async (e, _) =>
+        {
+            await Vehicles.VehicleWorkflowClient.SendFileReceivedAsync(client, e);
+            Ctx.Heartbeat(Interlocked.Increment(ref sent));
+        });
+        return ctx;
     }
 
     // ------------------------------------------------------------------ helpers

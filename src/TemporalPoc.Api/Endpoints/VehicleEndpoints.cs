@@ -9,7 +9,9 @@ namespace TemporalPoc.Api.Endpoints;
 
 public sealed record VehicleRequestBody(DateOnly From, DateOnly To, int Priority = 0, string? RequestId = null, string? Reason = null);
 
-public sealed record BulkVehicleRequestBody(List<string> VehicleIds, DateOnly From, DateOnly To, int Priority = 0, string? RequestId = null, string? Reason = null);
+public sealed record BulkVehicleRequestBody(List<string>? VehicleIds, DateOnly From, DateOnly To, int Priority = 0, string? RequestId = null, string? Reason = null, bool AllKnownVehicles = false, int VehiclesPerSecond = 10);
+
+public sealed record FileReceivedBody(DateOnly Day, string? FileKey = null, string? EventId = null);
 
 public static class VehicleEndpoints
 {
@@ -23,7 +25,7 @@ public static class VehicleEndpoints
             var request = new ProcessingRequest(body.RequestId ?? Guid.NewGuid().ToString("N"), vehicleId, body.From, body.To, body.Priority, body.Reason);
             try
             {
-                return Results.Ok(await SubmitWithAckAsync(client, request));
+                return Results.Ok(await VehicleWorkflowClient.SubmitWithAckAsync(client, request));
             }
             catch (WorkflowUpdateFailedException e)
             {
@@ -31,18 +33,32 @@ public static class VehicleEndpoints
             }
         }).WithSummary("Adds a range of days to the vehicle's queue (starts its workflow if needed) and returns what was merged");
 
-        vehicles.MapPost("/requests", async (BulkVehicleRequestBody body, ITemporalClient client, CancellationToken ct) =>
+        vehicles.MapPost("/{vehicleId}/files", async (string vehicleId, FileReceivedBody body, ITemporalClient client) =>
         {
-            var requestId = body.RequestId ?? Guid.NewGuid().ToString("N");
-            var sent = 0;
-            // Fire-and-forget, 50 vehicles at a time (Signal-With-Start: one atomic call per vehicle).
-            await Parallel.ForEachAsync(body.VehicleIds.Distinct(), new ParallelOptions { MaxDegreeOfParallelism = 50, CancellationToken = ct }, async (vehicleId, _) =>
+            // Real time: fire-and-forget signal, the vehicle workflow applies the "1 per minute" limit.
+            var eventId = body.EventId ?? body.FileKey ?? Guid.NewGuid().ToString("N");
+            await VehicleWorkflowClient.SendFileReceivedAsync(client, new FileReceivedEvent(eventId, vehicleId, body.Day, body.FileKey));
+            return Results.Accepted(value: new { vehicleId, eventId, day = body.Day });
+        }).WithSummary("A file was received for the vehicle: current operating day at most once per minute, other days as daily requests");
+
+        vehicles.MapPost("/requests", async (BulkVehicleRequestBody body, ITemporalClient client) =>
+        {
+            if (!body.AllKnownVehicles && (body.VehicleIds is null || body.VehicleIds.Count == 0))
             {
-                await SubmitSignalAsync(client, new ProcessingRequest(requestId, vehicleId, body.From, body.To, body.Priority, body.Reason));
-                Interlocked.Increment(ref sent);
-            });
-            return Results.Accepted(value: new { requestId, vehicles = sent });
-        }).WithSummary("Same request for many vehicles (e.g. after a configuration change)");
+                return Results.BadRequest(new { error = "No vehicle: give vehicleIds or allKnownVehicles=true" });
+            }
+            var requestId = body.RequestId ?? Guid.NewGuid().ToString("N");
+            // Durable, paced fan-out (a workflow): survives a crash of this API, never sends twice.
+            var workflowId = await VehicleWorkflowClient.StartFleetRequestAsync(client, new FleetRequestInput(
+                requestId, body.From, body.To, body.Priority, body.Reason, body.VehicleIds, body.AllKnownVehicles, body.VehiclesPerSecond));
+            return Results.Accepted(value: new { requestId, workflowId });
+        }).WithSummary("Same request for many vehicles or the whole fleet (e.g. after a configuration change); same per-day limits");
+
+        vehicles.MapGet("/requests/{requestId}", async (string requestId, ITemporalClient client) =>
+        {
+            var handle = client.GetWorkflowHandle<FleetRequestWorkflow>(FleetRequestWorkflow.WorkflowId(requestId));
+            return Results.Ok(new { status = (await handle.DescribeAsync()).Status.ToString(), progress = await handle.QueryAsync(wf => wf.Progress) });
+        }).WithSummary("Progress of a fleet request (vehicles submitted so far)");
 
         vehicles.MapGet("/{vehicleId}", async (string vehicleId, ITemporalClient client, PocDbContext db, CancellationToken ct) =>
         {
@@ -71,42 +87,4 @@ public static class VehicleEndpoints
             return await query.OrderBy(r => r.Day).Take(1000).ToListAsync(ct);
         }).WithSummary("Status of each processed day");
     }
-
-    /// <summary>Update-With-Start: starts the vehicle workflow if needed and returns the acknowledgement.</summary>
-    public static async Task<SubmitAck> SubmitWithAckAsync(ITemporalClient client, ProcessingRequest request)
-    {
-        for (var attempt = 1; ; attempt++)
-        {
-            var start = WithStartWorkflowOperation.Create(
-                (VehicleProcessingWorkflow wf) => wf.RunAsync(new VehicleWorkflowInput(request.VehicleId, null, null)),
-                StartOptions(request.VehicleId));
-            try
-            {
-                return await client.ExecuteUpdateWithStartWorkflowAsync(
-                    (VehicleProcessingWorkflow wf) => wf.SubmitAsync(request),
-                    new WorkflowUpdateWithStartOptions { StartWorkflowOperation = start });
-            }
-            catch (Exception e) when (attempt < 3 && e is WorkflowUpdateRpcTimeoutOrCanceledException or RpcException { Code: RpcException.StatusCode.NotFound })
-            {
-                // The workflow was completing (idle) at that moment: the same RequestId makes the retry safe.
-                await Task.Delay(200 * attempt);
-            }
-        }
-    }
-
-    /// <summary>Signal-With-Start: atomic "start if needed + deliver the request", no acknowledgement.</summary>
-    public static Task SubmitSignalAsync(ITemporalClient client, ProcessingRequest request)
-    {
-        var options = StartOptions(request.VehicleId);
-        options.StartSignal = "SubmitRequest";
-        options.StartSignalArgs = [request];
-        return client.StartWorkflowAsync((VehicleProcessingWorkflow wf) => wf.RunAsync(new VehicleWorkflowInput(request.VehicleId, null, null)), options);
-    }
-
-    private static WorkflowOptions StartOptions(string vehicleId) => new(VehicleProcessingWorkflow.WorkflowId(vehicleId), VehicleProcessingWorkflow.TaskQueue)
-    {
-        IdConflictPolicy = WorkflowIdConflictPolicy.UseExisting,   // running: attach to it
-        IdReusePolicy = WorkflowIdReusePolicy.AllowDuplicate,      // completed (idle): start a new run
-        StaticSummary = $"Processing queue of vehicle {vehicleId}",
-    };
 }

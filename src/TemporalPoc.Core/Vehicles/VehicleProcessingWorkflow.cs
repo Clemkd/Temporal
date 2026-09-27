@@ -16,6 +16,10 @@ namespace TemporalPoc.Core.Vehicles;
 ///   again afterwards (the new request may come from a change made during the processing). Already
 ///   processed days requested again are processed again: a new request means "recompute".
 /// - One day at a time per vehicle (no concurrent writes on a vehicle), chosen by priority then date.
+/// - Rate limits per (vehicle, day), whatever the source of the request (file, daily, mass): the current
+///   operating day is processed at most once per RealtimeMinInterval (1 min), any other day at most once per
+///   DailyMinInterval (1 h). Requests arriving meanwhile are merged and run when the interval has elapsed:
+///   nothing is dropped, every request is followed by a processing that starts after it.
 /// - Each day is one activity: transient failures retried with exponential backoff + jitter (max 5 retries),
 ///   business / application errors not retried. A failed day is recorded and the vehicle moves on.
 /// - Continue-as-new keeps the history bounded (pending days and counters are carried over); the workflow
@@ -33,6 +37,9 @@ public sealed class VehicleProcessingWorkflow
     private readonly List<string> _recentRequestIds = new();
     private readonly HashSet<string> _seenRequestIds = new();
     private readonly List<FailedDay> _recentFailures = new();
+    private readonly Dictionary<DateOnly, DateTime> _lastStarts = new();
+    private TimeZoneInfo _timeZone = TimeZoneInfo.Utc;
+    private long _changes;
     private string _vehicleId = "";
     private VehicleProcessingSettings _settings = new();
     private DateOnly? _inProgress;
@@ -53,6 +60,7 @@ public sealed class VehicleProcessingWorkflow
     {
         _vehicleId = input.VehicleId;
         _settings = input.Settings ?? new VehicleProcessingSettings();
+        _timeZone = TimeZoneInfo.FindSystemTimeZoneById(_settings.OperatingTimeZone);
         Restore(input.State);
     }
 
@@ -63,30 +71,48 @@ public sealed class VehicleProcessingWorkflow
         var daysThisRun = 0;
         while (true)
         {
-            // Wait for work. Nothing for IdleTimeout: complete (the next request starts a new run).
-            var hasWork = await Workflow.WaitConditionAsync(() => _pending.Count > 0, _settings.IdleTimeout);
-            if (!hasWork)
+            if (_pending.Count == 0)
             {
-                // Never complete with a handler still running or a request just merged.
-                await Workflow.WaitConditionAsync(() => Workflow.AllHandlersFinished);
-                if (_pending.Count == 0)
+                // Nothing to do. Nothing for IdleTimeout: complete (the next request starts a new run).
+                var hasWork = await Workflow.WaitConditionAsync(() => _pending.Count > 0, _settings.IdleTimeout);
+                if (!hasWork)
                 {
-                    return Status;
+                    // Never complete with a handler still running or a request just merged.
+                    await Workflow.WaitConditionAsync(() => Workflow.AllHandlersFinished);
+                    if (_pending.Count == 0)
+                    {
+                        return Status;
+                    }
                 }
                 continue;
             }
 
-            var day = PickNext();
+            var now = Workflow.UtcNow;
+            PruneLastStarts(now);
+            var eligible = _pending.Values.Where(d => EligibleAt(d.Day, now) <= now).ToList();
+            if (eligible.Count == 0)
+            {
+                // Every pending day is within its minimum interval: sleep until the first one becomes
+                // eligible, or until a new request arrives (it may concern another, eligible, day).
+                var wakeAt = _pending.Values.Min(d => EligibleAt(d.Day, now));
+                var seen = _changes;
+                var delay = wakeAt - now;
+                await Workflow.WaitConditionAsync(() => _changes != seen, delay > TimeSpan.FromMilliseconds(1) ? delay : TimeSpan.FromMilliseconds(1));
+                continue;
+            }
+
+            var day = Ordered(eligible).First();
             _pending.Remove(day.Day);
             _inProgress = day.Day;
             _inProgressDay = day;
             _rerunInProgress = false;
+            _lastStarts[day.Day] = now;
 
             await ProcessDayAsync(day);
 
             if (_rerunInProgress)
             {
-                // Requested again while it was being processed: process it once more.
+                // Requested again while it was being processed: process it once more, after its interval.
                 Merge(day.Day, _inProgressDay.Priority, _inProgressDay.RequestIds);
             }
             _inProgress = null;
@@ -102,13 +128,37 @@ public sealed class VehicleProcessingWorkflow
         }
     }
 
+    // ------------------------------------------------------------------ rate limits
+
+    /// <summary>Operating day of an instant (time zone + start hour), e.g. 03:00 with a 04:00 start = previous day.</summary>
+    public static DateOnly OperatingDayOf(DateTime utc, TimeZoneInfo zone, int startHour) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), zone).AddHours(-startHour));
+
+    private DateOnly OperatingDay(DateTime utc) => OperatingDayOf(utc, _timeZone, _settings.OperatingDayStartHour);
+
+    private TimeSpan MinInterval(DateOnly day, DateTime now) =>
+        day == OperatingDay(now) ? _settings.RealtimeMinInterval : _settings.DailyMinInterval;
+
+    private DateTime EligibleAt(DateOnly day, DateTime now) =>
+        _lastStarts.TryGetValue(day, out var last) ? last + MinInterval(day, now) : DateTime.MinValue;
+
+    /// <summary>A start older than the longest interval no longer limits anything: forget it (bounded state).</summary>
+    private void PruneLastStarts(DateTime now)
+    {
+        var horizon = now - (_settings.DailyMinInterval > _settings.RealtimeMinInterval ? _settings.DailyMinInterval : _settings.RealtimeMinInterval);
+        foreach (var day in _lastStarts.Where(kv => kv.Value < horizon && kv.Key != _inProgress).Select(kv => kv.Key).ToList())
+        {
+            _lastStarts.Remove(day);
+        }
+    }
+
     private async Task ProcessDayAsync(PendingDay day)
     {
         var input = new VehicleDayInput(_vehicleId, day.Day, day.RequestIds,
             _settings.RetryInitialInterval, _settings.RetryMaxInterval, _settings.RetryBackoffCoefficient);
         try
         {
-            await Workflow.ExecuteActivityAsync((VehicleDayActivities a) => a.ProcessDayAsync(input), DayActivityOptions());
+            await Workflow.ExecuteActivityAsync((VehicleDayActivities a) => a.ProcessDayAsync(input), DayActivityOptions(day.Day));
             _succeeded++;
         }
         catch (ActivityFailureException e) when (!TemporalException.IsCanceledException(e))
@@ -129,8 +179,9 @@ public sealed class VehicleProcessingWorkflow
         }
     }
 
-    private ActivityOptions DayActivityOptions() => new()
+    private ActivityOptions DayActivityOptions(DateOnly day) => new()
     {
+        TaskQueue = day == OperatingDay(Workflow.UtcNow) ? _settings.RealtimeTaskQueue : null,
         StartToCloseTimeout = _settings.DayTimeout,
         HeartbeatTimeout = _settings.HeartbeatTimeout,
         RetryPolicy = new RetryPolicy
@@ -227,12 +278,28 @@ public sealed class VehicleProcessingWorkflow
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Real time event (file received). Current operating day: high priority, at most once per minute.
+    /// Late file (another day): processed as a daily request (at most once per hour for that day).
+    /// </summary>
+    [WorkflowSignal("FileReceived")]
+    public Task FileReceivedAsync(FileReceivedEvent e)
+    {
+        var current = e.Day == OperatingDay(Workflow.UtcNow);
+        var request = new ProcessingRequest(e.EventId, e.VehicleId, e.Day, e.Day,
+            current ? _settings.RealtimePriority : _settings.LateFilePriority, current ? "file" : "late-file");
+        return SubmitSignalAsync(request);
+    }
+
     [WorkflowQuery("Status")]
     public VehicleStatus Status => new(
         _vehicleId,
+        OperatingDay(Workflow.UtcNow),
         _inProgress,
         _pending.Count,
-        Ordered(_pending.Values).Take(20).ToList(),
+        Ordered(_pending.Values).Take(20)
+            .Select(d => new PendingDayView(d.Day, d.Priority, EligibleAt(d.Day, Workflow.UtcNow), d.Day == OperatingDay(Workflow.UtcNow), d.RequestIds))
+            .ToList(),
         _succeeded,
         _failed,
         _recentFailures.ToList(),
@@ -252,6 +319,7 @@ public sealed class VehicleProcessingWorkflow
             _recentRequestIds.RemoveAt(0);
         }
 
+        _changes++;
         int added = 0, merged = 0, requeued = 0;
         for (var day = request.From; day <= request.To; day = day.AddDays(1))
         {
@@ -306,8 +374,6 @@ public sealed class VehicleProcessingWorkflow
 
     // ------------------------------------------------------------------ ordering & state
 
-    private PendingDay PickNext() => Ordered(_pending.Values).First();
-
     /// <summary>Deterministic order: priority, then date (per settings), then age of the request.</summary>
     private IOrderedEnumerable<PendingDay> Ordered(IEnumerable<PendingDay> days)
     {
@@ -334,6 +400,10 @@ public sealed class VehicleProcessingWorkflow
             _recentRequestIds.Add(id);
         }
         _recentFailures.AddRange(state.RecentFailures);
+        foreach (var start in state.LastStarts)
+        {
+            _lastStarts[start.Day] = start.StartedAt;
+        }
         _succeeded = state.Succeeded;
         _failed = state.Failed;
         _runs = state.Runs + 1;
@@ -344,6 +414,7 @@ public sealed class VehicleProcessingWorkflow
         Pending = _pending.Values.OrderBy(d => d.Day).ToList(),
         RecentRequestIds = _recentRequestIds.ToList(),
         RecentFailures = _recentFailures.ToList(),
+        LastStarts = _lastStarts.OrderBy(kv => kv.Key).Select(kv => new DayStart(kv.Key, kv.Value)).ToList(),
         Succeeded = _succeeded,
         Failed = _failed,
         Runs = _runs,

@@ -24,6 +24,11 @@ public class VehicleProcessingWorkflowTests(WorkflowEnvironmentFixture fixture)
         RetryMaxInterval = TimeSpan.FromMilliseconds(200),
         HeartbeatTimeout = TimeSpan.FromSeconds(10),
         DayTimeout = TimeSpan.FromSeconds(30),
+        // No rate limit in the generic tests (the limits have their own tests below).
+        RealtimeMinInterval = TimeSpan.Zero,
+        DailyMinInterval = TimeSpan.Zero,
+        OperatingTimeZone = "UTC",
+        RealtimeTaskQueue = null,   // the test worker polls a single queue
     };
 
     private sealed class FakeProcessor : IVehicleDayProcessor
@@ -79,6 +84,14 @@ public class VehicleProcessingWorkflowTests(WorkflowEnvironmentFixture fixture)
             var options = Options();
             options.StartSignal = "SubmitRequest";
             options.StartSignalArgs = [r];
+            return Client.StartWorkflowAsync((VehicleProcessingWorkflow wf) => wf.RunAsync(new VehicleWorkflowInput(VehicleId, settings, null)), options);
+        }
+
+        public Task FileAsync(string eventId, DateOnly day, VehicleProcessingSettings settings)
+        {
+            var options = Options();
+            options.StartSignal = "FileReceived";
+            options.StartSignalArgs = [new FileReceivedEvent(eventId, VehicleId, day)];
             return Client.StartWorkflowAsync((VehicleProcessingWorkflow wf) => wf.RunAsync(new VehicleWorkflowInput(VehicleId, settings, null)), options);
         }
 
@@ -297,5 +310,162 @@ public class VehicleProcessingWorkflowTests(WorkflowEnvironmentFixture fixture)
         var replayer = new WorkflowReplayer(new WorkflowReplayerOptions().AddWorkflow<VehicleProcessingWorkflow>());
         var result = await replayer.ReplayWorkflowAsync(history);
         Assert.Null(result.ReplayFailure);
+    }
+
+    // ------------------------------------------------------------------ rate limits
+
+    private static DateOnly Today => VehicleProcessingWorkflow.OperatingDayOf(DateTime.UtcNow, TimeZoneInfo.Utc, 0);
+
+    // The limit applies to the workflow's scheduling decisions; the fake processor sees the activity start,
+    // which comes a few hundred ms later (more for the very first one): tolerate that dispatch latency.
+    private const double DispatchTolerance = 0.5;
+
+    private static List<DateTime> StartsOf(FakeProcessor p, DateOnly day) =>
+        p.Calls.Where(c => c.Day == day).Select(c => c.At).OrderBy(t => t).ToList();
+
+    [Fact]
+    public async Task Realtime_files_run_the_current_day_at_most_once_per_interval_and_never_miss_the_last_file()
+    {
+        var h = Create();
+        using var _ = h.Worker;
+        var settings = Fast with { RealtimeMinInterval = TimeSpan.FromSeconds(2), DailyMinInterval = TimeSpan.FromHours(1), IdleTimeout = TimeSpan.FromSeconds(3) };
+        var today = Today;
+        DateTime lastSent = default;
+
+        await h.Worker.ExecuteAsync(async () =>
+        {
+            // A file every 250 ms for 5 s (20 files) on the current operating day.
+            for (var i = 0; i < 20; i++)
+            {
+                await h.FileAsync($"file-{i}", today, settings);
+                lastSent = DateTime.UtcNow;
+                await Task.Delay(250);
+            }
+            await h.Handle.GetResultAsync<VehicleStatus>();
+        });
+
+        var starts = StartsOf(h.Processor, today);
+        Assert.InRange(starts.Count, 2, 4);                       // 20 files -> a few processings, not 20
+        for (var i = 1; i < starts.Count; i++)
+        {
+            Assert.True((starts[i] - starts[i - 1]).TotalSeconds >= 2 - DispatchTolerance, $"gap {starts[i] - starts[i - 1]}");
+        }
+        Assert.True(starts[^1] >= lastSent.AddMilliseconds(-100), "the last file is followed by a processing");
+    }
+
+    [Fact]
+    public async Task Daily_and_mass_requests_for_a_recent_day_are_merged_and_deferred_without_blocking_other_days()
+    {
+        var h = Create();
+        using var _ = h.Worker;
+        var settings = Fast with { RealtimeMinInterval = TimeSpan.FromSeconds(1), DailyMinInterval = TimeSpan.FromSeconds(3), IdleTimeout = TimeSpan.FromSeconds(2) };
+        var d = Today.AddDays(-10);
+        var e = Today.AddDays(-20);
+
+        await h.Worker.ExecuteAsync(async () =>
+        {
+            await h.SubmitAsync(h.Request("daily-1", d, d), settings);
+            await h.Processor.FirstStarted.Task;
+            await Task.Delay(300);
+            // Two more requests for the same day within its interval (e.g. a mass reprocessing): merged, deferred.
+            var ack = await h.SubmitAsync(h.Request("mass-1", d, d), settings);
+            Assert.Equal(1, ack.Added);
+            ack = await h.SubmitAsync(h.Request("mass-2", d, d), settings);
+            Assert.Equal(1, ack.Merged);
+            // Another day is not blocked by that interval.
+            await h.SubmitAsync(h.Request("other", e, e), settings);
+            await h.Handle.GetResultAsync<VehicleStatus>();
+        });
+
+        var dStarts = StartsOf(h.Processor, d);
+        Assert.Equal(2, dStarts.Count);                                   // 3 requests -> 2 processings
+        Assert.True((dStarts[1] - dStarts[0]).TotalSeconds >= 3 - DispatchTolerance, $"gap {dStarts[1] - dStarts[0]}");
+        Assert.True(StartsOf(h.Processor, e).Single() < dStarts[1], "the other day ran during the interval");
+    }
+
+    [Fact]
+    public async Task Late_file_follows_the_daily_interval_while_current_day_files_follow_the_realtime_one()
+    {
+        var h = Create();
+        using var _ = h.Worker;
+        var settings = Fast with { RealtimeMinInterval = TimeSpan.FromSeconds(1), DailyMinInterval = TimeSpan.FromSeconds(4), IdleTimeout = TimeSpan.FromSeconds(2) };
+        var today = Today;
+        var yesterday = today.AddDays(-1);
+
+        // Both first files are pending together (sent before the worker runs): priority decides the order.
+        await h.FileAsync("late-1", yesterday, settings);
+        await h.FileAsync("rt-1", today, settings);
+        await h.Worker.ExecuteAsync(async () =>
+        {
+            await h.Processor.FirstStarted.Task;
+            await Task.Delay(500);
+            await h.FileAsync("late-2", yesterday, settings);
+            await h.FileAsync("rt-2", today, settings);
+            await h.Handle.GetResultAsync<VehicleStatus>();
+        });
+
+        var rt = StartsOf(h.Processor, today);
+        var late = StartsOf(h.Processor, yesterday);
+        Assert.Equal((2, 2), (rt.Count, late.Count));
+        Assert.InRange((rt[1] - rt[0]).TotalSeconds, 1 - DispatchTolerance, 3.5);   // realtime interval (1 s)
+        Assert.True((late[1] - late[0]).TotalSeconds >= 4 - DispatchTolerance, $"late gap {late[1] - late[0]}");   // daily interval (4 s)
+        Assert.Equal(today, h.Processor.Calls.First().Day);               // current day first (higher priority)
+    }
+
+    [Fact]
+    public void Operating_day_honours_time_zone_and_start_hour()
+    {
+        var paris = TimeZoneInfo.FindSystemTimeZoneById("Europe/Paris");
+        var utc = new DateTime(2026, 3, 1, 23, 30, 0, DateTimeKind.Utc);   // 00:30 in Paris on March 2
+        Assert.Equal(new DateOnly(2026, 3, 2), VehicleProcessingWorkflow.OperatingDayOf(utc, paris, 0));
+        Assert.Equal(new DateOnly(2026, 3, 1), VehicleProcessingWorkflow.OperatingDayOf(utc, paris, 4));   // day starts at 04:00
+    }
+
+    // ------------------------------------------------------------------ fleet requests
+
+    private sealed class FakeRegistry(params string[] ids) : IVehicleRegistry
+    {
+        public Task<IReadOnlyList<string>> AllVehicleIdsAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<string>>(ids);
+    }
+
+    [Fact]
+    public async Task Fleet_request_reaches_every_vehicle_once_paced_and_idempotent()
+    {
+        var processor = new FakeProcessor();
+        var queue = $"fleet-test-{Guid.NewGuid():N}";
+        var prefix = $"f{Guid.NewGuid():N}"[..8];
+        var known = Enumerable.Range(1, 5).Select(i => $"{prefix}-known-{i}").ToArray();
+        var explicitIds = new[] { $"{prefix}-x-1", $"{prefix}-x-2", known[0] };   // overlaps the registry
+        using var worker = new TemporalWorker(fixture.Env.Client, new TemporalWorkerOptions(queue)
+            .AddWorkflow<VehicleProcessingWorkflow>()
+            .AddWorkflow<FleetRequestWorkflow>()
+            .AddAllActivities(new VehicleDayActivities(processor, new FakeStore(), NullLogger<VehicleDayActivities>.Instance))
+            .AddAllActivities(new FleetActivities(fixture.Env.Client, new FakeRegistry(known))));
+
+        var requestId = $"config-{Guid.NewGuid():N}";
+        var input = new FleetRequestInput(requestId, Jan1, Jan1.AddDays(2), VehicleIds: explicitIds, AllKnownVehicles: true,
+            VehiclesPerSecond: 3, VehicleTaskQueue: queue);
+
+        await worker.ExecuteAsync(async () =>
+        {
+            var id = await VehicleWorkflowClient.StartFleetRequestAsync(fixture.Env.Client, input, queue);
+            var progress = await fixture.Env.Client.GetWorkflowHandle<FleetRequestWorkflow>(id).GetResultAsync<FleetRequestProgress>();
+            Assert.Equal((7, 7), (progress.Vehicles, progress.Submitted));   // 5 known + 2 explicit, duplicate removed
+
+            // Same request sent again after completion: no second fan-out.
+            Assert.Equal(id, await VehicleWorkflowClient.StartFleetRequestAsync(fixture.Env.Client, input, queue));
+
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (processor.Calls.Count < 21 && DateTime.UtcNow < deadline)
+            {
+                await Task.Delay(200);
+            }
+            await Task.Delay(1000);   // nothing more should arrive
+        });
+
+        Assert.Equal(21, processor.Calls.Count);   // 7 vehicles x 3 days, each once
+        var first = processor.Calls.Min(c => c.At);
+        var last = processor.Calls.Max(c => c.At);
+        Assert.True((last - first).TotalSeconds >= 1.5, "3 batches of 3 vehicles, one per second");
     }
 }
